@@ -91,7 +91,7 @@ async function updateCustomerState(customer, newState, newData = null) {
         customer.conversation_data = newData;
     }
     await customer.save();
-    console.log(`Updated state for ${customer.facebook_psid} to ${newState}`);
+    console.log(`Updated state for ${customer.facebook_psid}`);
 }
 
 // --- Helper function to clear customer state ---
@@ -106,7 +106,7 @@ async function clearCustomerState(customer) {
 // --- Message Handler ---
 async function handleMessage(sender_psid, received_message) {
     if (received_message.is_echo) {
-        console.log(`Ignoring echo message from page.`);
+        console.log("Ignoring echo message from page.");
         return;
     }
 
@@ -123,84 +123,170 @@ async function handleMessage(sender_psid, received_message) {
     if (quickReplyPayload) {
         console.log(`Handling quick reply click with payload: ${quickReplyPayload}`);
 
-        if (currentState === 'ORDERING_CHECK_ADDRESS') {
-            if (quickReplyPayload === 'CONFIRM_ADDRESS_YES') {
-                await updateCustomerState(customer, 'ORDERING_SELECT_PRODUCT');
-                response = { text: "Great! Please use the button below to select your items." };
+        if (currentState === "ORDERING_CHECK_ADDRESS") {
+            if (quickReplyPayload === "CONFIRM_ADDRESS_YES") {
+                await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
+                // response = { text: "Great! Please use the button below to select your items." };
                 await callSendAPI(sender_psid, response);
                 await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
                 return;
-            } else if (quickReplyPayload === 'CONFIRM_ADDRESS_NO') {
-                await updateCustomerState(customer, 'ORDERING_AWAITING_ADDRESS');
+            } else if (quickReplyPayload === "CONFIRM_ADDRESS_NO") {
+                await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS");
                 response = { text: "Okay, please provide your updated details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
                 await callSendAPI(sender_psid, response);
                 return;
             }
+        } else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
+            if (quickReplyPayload.startsWith("CONFIRM_ORDER:")) {
+                await handleConfirmOrder(sender_psid, quickReplyPayload, customer);
+                return;
+            } else if (quickReplyPayload.startsWith("EDIT_ORDER:")) {
+                await handleEditOrder(sender_psid, quickReplyPayload, customer);
+                return;
+            } else if (quickReplyPayload.startsWith("CANCEL_ORDER:")) {
+                await handleCancelOrder(sender_psid, quickReplyPayload, customer);
+                return;
+            }
+        } else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
+            if (quickReplyPayload.startsWith("MARK_PAID_CLAIMED:")) {
+                await handleMarkPaidClaimed(sender_psid, quickReplyPayload, customer);
+                return;
+            }
+        } else if (quickReplyPayload.startsWith("MARK_PAID_CLAIMED:")) {
+            await handleMarkPaidClaimed(sender_psid, payload, customer);
+            return;
+        } else {
+            console.log(`Unhandled text quick reply payload: ${quickReplyPayload}`);
         }
-        else if (currentState === 'AWAITING_ORDER_CONFIRMATION') {
-             if (quickReplyPayload.startsWith('CONFIRM_ORDER:')) {
-                 await handleConfirmOrder(sender_psid, quickReplyPayload, customer);
-                 return;
-             } else if (quickReplyPayload.startsWith('CANCEL_ORDER:')) {
-                 await handleCancelOrder(sender_psid, quickReplyPayload, customer);
-                 return;
-             }
-        }
-        else if (quickReplyPayload.startsWith('MARK_PAID_CLAIMED:')) {
-             await handleMarkPaidClaimed(sender_psid, quickReplyPayload, customer);
-             return;
-        }
-         else {
-             console.log(`Unhandled text quick reply payload: ${quickReplyPayload}`);
-         }
     }
 
+exports.handlePaymentVerified = handlePaymentVerified;
 
     // Handle Regular Text Messages
     if (messageText) {
         console.log(`Handling text message from ${sender_psid}: ${lowerCaseMessageText}`);
-
+        if (lowerCaseMessageText === "help") {
+                    let helpText = "Here are the available commands:\n\n";
+                    if (currentState === "INITIAL") {
+                        helpText += "- order: Start a new order\n";
+                    } else if (currentState === "ORDERING_AWAITING_ADDRESS") {
+                        helpText += "- Provide your details in the format: Full Name, Email, Street Address, City, State, Zip\n";
+                    } else if (currentState === "ORDERING_CHECK_ADDRESS") {
+                        helpText += "- yes - Confirm your address\n";
+                        helpText += "- no - Update your address\n";
+                    } else if (currentState === "ORDERING_SELECT_PRODUCT") {
+                        helpText += "- Use the 'Select Items' button to add products to your order\n";
+                        helpText += "- Type 'done' when you are finished selecting products\n";
+                        helpText += "- restart: Start over with a new order\n";
+                        helpText += "- cart: View your current cart\n";
+                    } else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
+                        helpText += "- confirm: Confirm your order\n";
+                        helpText += "- edit: Edit your order\n";
+                        helpText += "- cancel: Cancel your order\n";
+                    } else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
+                        helpText += "- paid: Confirm your payment\n";
+                        helpText += "- edit: Edit your order\n";
+                        helpText += "- cart: View your current cart\n";
+                    } else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
+                        helpText += "- Select a group order by typing its name or ID, or by using the quick replies\n";
+                    }
+                    response = { text: helpText };
+                    callSendAPI(sender_psid, response);
+                    return;
+                }
         // Start Order
-        if (lowerCaseMessageText === 'order' && currentState === 'INITIAL') {
+        else if (lowerCaseMessageText === "order" && currentState === "INITIAL") {
             try {
-                const activeGroupOrder = await GroupOrder.findOne({ where: { status: 'Active' } });
-                if (!activeGroupOrder) {
+                const activeGroupOrders = await GroupOrder.findAll({ where: { status: "Active" } });
+                if (activeGroupOrders.length === 0) {
                     response = { text: "Sorry, there's no active group order right now." };
-                } else {
-                    currentData = { customerId: customer.id, groupOrderId: activeGroupOrder.id, currentOrderItems: {} };
+                } else if (activeGroupOrders.length > 1) {
+                    currentData = { customerId: customer.id, currentOrderItems: {}, availableGroupOrders: activeGroupOrders.map(go => ({ id: go.id, name: go.name })) };
+
+                    let groupOrderOptions = activeGroupOrders.map(go => ({
+                        content_type: "text",
+                        title: go.name,
+                        payload: `SELECT_GROUP_ORDER:${go.id}`
+                    }));
+
+                    let messageText = "There are multiple active group orders. Please select one by typing its name or ID, or by using the buttons below:\n\n";
+                    activeGroupOrders.forEach(go => {
+                        messageText += `- ${go.name} (ID: ${go.id})\n`;
+                    });
+
+                    response = {
+                        text: messageText,
+                        quick_replies: groupOrderOptions
+                    };
+                    await updateCustomerState(customer, "AWAITING_GROUP_ORDER_SELECTION", currentData);
+                    callSendAPI(sender_psid, response);
+                    return;
+                }
+                 else {
+                    currentData = { customerId: customer.id, groupOrderId: activeGroupOrders[0].id, currentOrderItems: {} };
                     if (customer.name && customer.email && customer.street_address && customer.city && customer.state && customer.zip) {
-                        await updateCustomerState(customer, 'ORDERING_CHECK_ADDRESS', currentData);
+                        await updateCustomerState(customer, "ORDERING_CHECK_ADDRESS", currentData);
                         response = {
                             text: `Welcome back, ${customer.name}!\nIs this info still correct?\n\nEmail: ${customer.email}\nAddress: ${customer.street_address}, ${customer.city}, ${customer.state} ${customer.zip}`,
                             quick_replies: [
-                                { content_type: "text", title: "Yes, looks good!", payload: "CONFIRM_ADDRESS_YES" },
-                                { content_type: "text", title: "No, update it", payload: "CONFIRM_ADDRESS_NO" }
+                                { content_type: "text", title: "Yes", payload: "CONFIRM_ADDRESS_YES" },
+                                { content_type: "text", title: "No", payload: "CONFIRM_ADDRESS_NO" }
                             ]
                         };
+                        // callSendAPI(sender_psid, response);
                     } else {
-                        await updateCustomerState(customer, 'ORDERING_AWAITING_ADDRESS', currentData);
+                        await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS", currentData);
                         response = { text: "To start your order, please provide your details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
+                        // callSendAPI(sender_psid, response);
                     }
                 }
             } catch (error) {
                 console.error("Error starting order process:", error);
                 response = { text: "Sorry, something went wrong while starting your order." };
+                 callSendAPI(sender_psid, response);
+            }
+        } else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
+             const selectedGroupOrder = currentData.availableGroupOrders.find(go => (
+                go.name.toLowerCase() === lowerCaseMessageText || String(go.id) === messageText
+            ));
+
+            if (selectedGroupOrder) {
+                currentData.groupOrderId = selectedGroupOrder.id;
+                await updateCustomerState(customer, "ORDERING_CHECK_ADDRESS", currentData);
+                 if (customer.name && customer.email && customer.street_address && customer.city && customer.state && customer.zip) {
+                    response = {
+                        text: `Welcome back, ${customer.name}!\nIs this info still correct?\n\nEmail: ${customer.email}\nAddress: ${customer.street_address}, ${customer.city}, ${customer.state} ${customer.zip}`,
+                            quick_replies: [
+                                { content_type: "text", title: "Yes, looks good!", payload: "CONFIRM_ADDRESS_YES" },
+                                { content_type: "text", title: "No, update it", payload: "CONFIRM_ADDRESS_NO" }
+                            ]
+                        };
+                    // callSendAPI(sender_psid, response);
+                    } else {
+                        await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS", currentData);
+                        response = { text: "To start your order, please provide your details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
+                         // callSendAPI(sender_psid, response);
+                    }
+            } else {
+                response = { text: "Sorry, I couldn't find a group order matching that name or ID. Please try again, or type 'help' for available commands." };
+                 callSendAPI(sender_psid, response);
+                 return;
             }
         }
         // Handle Address/Info Input
-        else if (currentState === 'ORDERING_AWAITING_ADDRESS') {
+        else if (currentState === "ORDERING_AWAITING_ADDRESS") {
             console.log("Received potential details:", messageText);
-            const parts = messageText.split(',').map(p => p.trim());
+            const parts = messageText.split(",").map(p => p.trim());
             if (parts.length === 6) {
                 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
                 if (!emailRegex.test(parts[1])) {
-                     response = { text: "Hmm, that doesn't look like a valid email address. Please try again in the format:\nFull Name, Email, Street Address, City, State, Zip" };
+                    response = { text: "Hmm, that doesn't look like a valid email address. Please try again in the format:\nFull Name, Email, Street Address, City, State, Zip" };
                 } else {
                     try {
                         customer.name = parts[0]; customer.email = parts[1]; customer.street_address = parts[2];
                         customer.city = parts[3]; customer.state = parts[4]; customer.zip = parts[5];
                         customer.is_international = false; customer.international_address_block = null;
-                        await updateCustomerState(customer, 'ORDERING_SELECT_PRODUCT');
+                        await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
                         response = { text: "Thanks! Your details are saved. Please use the button below to select your items." };
                         await callSendAPI(sender_psid, response);
                         await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
@@ -214,8 +300,25 @@ async function handleMessage(sender_psid, received_message) {
                 response = { text: "Hmm, that doesn't look like the right format (6 parts separated by commas). Please use:\nFull Name, Email, Street Address, City, State, Zip" };
             }
         }
+        else if (currentState === "ORDERING_CHECK_ADDRESS"){
+            if (lowerCaseMessageText === "yes") {
+                await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
+                response = { text: "Great! Please use the button below to select your items." };
+                await callSendAPI(sender_psid, response);
+                await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+                return;
+            } else if (lowerCaseMessageText === "no") {
+                await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS");
+                response = { text: "Okay, please provide your updated details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
+                await callSendAPI(sender_psid, response);
+                return;
+            } 
+        }
+
+
+
         // Handle 'cart' command
-        else if (lowerCaseMessageText === 'cart' && currentState === 'ORDERING_SELECT_PRODUCT') {
+        else if (lowerCaseMessageText === "cart" && currentState === "ORDERING_SELECT_PRODUCT") {
             if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
                 response = { text: "Your cart is empty. Use the 'Select Items' button to add products." };
             } else {
@@ -230,20 +333,44 @@ async function handleMessage(sender_psid, received_message) {
                 response = { text: cartText };
             }
         }
+        // Handle 'restart' during product selection
+        else if (lowerCaseMessageText === "restart" && currentState === "ORDERING_SELECT_PRODUCT") {
+            await clearCustomerState(customer);
+            response = { text: "Okay, let's start over. Please type 'order' to begin." };
+        }
+        // Handle 'help' command
+        
         // Handle 'Done' - This should now primarily be triggered implicitly when webview closes and sends data
-        else if (lowerCaseMessageText === 'done' && currentState === 'ORDERING_SELECT_PRODUCT') {
-             if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
+        else if (lowerCaseMessageText === "done" && currentState === "ORDERING_SELECT_PRODUCT") {
+            if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
                 response = { text: "You haven't added any items via the selection window yet! Click the 'Select Items' button again or type 'cancel'." };
             } else {
                 try {
                     let subtotal = 0;
                     Object.values(currentData.currentOrderItems).forEach(item => { subtotal += item.price * item.quantity; });
-                    const shippingCost = 5.00; // Placeholder
+                    let shippingCost = 5.00; // Default shipping cost
+
+                    // Check if customer has existing *paid* orders for the same group order
+                    const existingPaidOrders = await Order.findAll({
+                        where: {
+                            customer_id: currentData.customerId,
+                            group_order_id: currentData.groupOrderId,
+                            payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
+                        }
+                    });
+
+                    // If no existing paid orders, charge shipping
+                    if (existingPaidOrders && existingPaidOrders.length === 0) {
+                        shippingCost = 5.00;
+                    } else {
+                        shippingCost = 0.00; // Set shipping to $0 if existing *paid* order found
+                    }
+
                     const totalAmount = subtotal + shippingCost;
 
                     const order = await Order.create({
                         customer_id: currentData.customerId, group_order_id: currentData.groupOrderId,
-                        total_amount: totalAmount, shipping_cost: shippingCost, payment_status: 'Invoice Sent'
+                        total_amount: totalAmount, shipping_cost: shippingCost, payment_status: "Invoice Sent"
                     });
                     const orderItemsToCreate = Object.values(currentData.currentOrderItems).map(item => ({
                         order_id: order.id, product_id: item.productId,
@@ -251,7 +378,11 @@ async function handleMessage(sender_psid, received_message) {
                     }));
                     await OrderItem.bulkCreate(orderItemsToCreate);
 
-                    let invoiceText = `Okay, here's your order summary:\n\n`;
+                    let invoiceText = `Okay, here's your order summary:\n\n`; // Default text
+                    if (existingPaidOrders && existingPaidOrders.length > 0) {
+                        invoiceText = "Okay, here's the addition to your existing order:\n\n";
+                    }
+
                     Object.values(currentData.currentOrderItems).forEach(item => {
                         invoiceText += `- ${item.name} (Qty: ${item.quantity}): $${(item.price * item.quantity).toFixed(2)}\n`;
                     });
@@ -260,13 +391,15 @@ async function handleMessage(sender_psid, received_message) {
                     response = {
                         text: invoiceText + "\n\nPlease confirm your order details above.",
                         quick_replies: [
-                            { content_type: "text", title: "👍 Confirm Order", payload: `CONFIRM_ORDER:${order.id}` },
-                            { content_type: "text", title: "❌ Cancel Order", payload: `CANCEL_ORDER:${order.id}` }
+                            { content_type: "text", title: "👍 Confirm", payload: `CONFIRM_ORDER:${order.id}` },
+                            { content_type: "text", title: "✏️ Edit", payload: `EDIT_ORDER:${order.id}` },
+                            { content_type: "text", title: "❌ Cancel", payload: `CANCEL_ORDER:${order.id}` }
                         ]
                     };
+
                     currentData.orderId = order.id;
-                    currentData.currentOrderItems = {}; // Clear cart from state
-                    await updateCustomerState(customer, 'AWAITING_ORDER_CONFIRMATION', currentData);
+                    // currentData.currentOrderItems = {}; // Clear cart from state
+                    await updateCustomerState(customer, "AWAITING_ORDER_CONFIRMATION", currentData);
                     await callSendAPI(sender_psid, response);
                     return;
                 } catch (error) {
@@ -276,13 +409,45 @@ async function handleMessage(sender_psid, received_message) {
             }
         }
         // Default / Fallback
-        else {
-            if (lowerCaseMessageText === 'order' && currentState !== 'INITIAL') {
-                response = { text: "It looks like you're already in the middle of an order process." };
-            } else if (!quickReplyPayload) {
-                response = { "text": `You sent: "${messageText}". Type 'order' to start.` };
+        else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
+            if (lowerCaseMessageText === "confirm") {
+                await handleConfirmOrder(sender_psid, `CONFIRM_ORDER:${currentData.orderId}`, customer);
+                return;
+            } else if (lowerCaseMessageText === "edit") {
+                await handleEditOrder(sender_psid, `EDIT_ORDER:${currentData.orderId}`, customer);
+                return;
+            } else if (lowerCaseMessageText === "cancel") {
+                await handleCancelOrder(sender_psid, `CANCEL_ORDER:${currentData.orderId}`, customer);
+                return;
+            } else {
+                response = { text: "Please confirm, edit, or cancel your order." };
             }
-        }
+        } 
+
+        else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
+            if (lowerCaseMessageText === "cart") {
+                if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
+                    response = { text: "Your cart is empty." };
+                } else {
+                    let cartText = "Your current cart:\n";
+                    let subtotal = 0;
+                    for (const productId in currentData.currentOrderItems) {
+                        const item = currentData.currentOrderItems[productId];
+                        cartText += `- ${item.name} (Qty: ${item.quantity}): $${(item.price * item.quantity).toFixed(2)}\n`;
+                        subtotal += item.price * item.quantity;
+                    }
+                    cartText += `\nSubtotal: $${subtotal.toFixed(2)}`;
+                response = { text: cartText };
+            }
+            } else if (lowerCaseMessageText === "edit") {
+                await handleEditOrder(sender_psid, `EDIT_ORDER:${currentData.orderId}`, customer);
+                return;
+            } else if (lowerCaseMessageText === "paid") {
+                await handleMarkPaidClaimed(sender_psid, `MARK_PAID_CLAIMED:${currentData.orderId}`, customer);
+                return;
+            } else {
+                response = { text: "Please confirm your payment by typing 'paid', edit your order by typing 'edit', or check your cart by typing 'cart'." };
+            }
     }
     // Handle Non-Text Messages
     else if (received_message.attachments) {
@@ -348,15 +513,29 @@ async function handleConfirmOrder(sender_psid, payload, customer) {
         await new Promise(resolve => setTimeout(resolve, 2000));
         const confirmationResponse = {
             text: "Please click below once you've sent the payment:",
-            quick_replies: [ { content_type: "text", title: "✅ I have paid", payload: `MARK_PAID_CLAIMED:${orderId}` } ]
+            quick_replies: [ { content_type: "text", title: "✅ Paid", payload: `MARK_PAID_CLAIMED:${orderId}` } ]
         };
         await callSendAPI(sender_psid, confirmationResponse);
-        await clearCustomerState(customer);
+        await updateCustomerState(customer, 'AWAITING_PAYMENT_CONFIRMATION', currentData);
     } else {
         console.warn(`Order confirmation payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
         await callSendAPI(sender_psid, { text: "Sorry, there was an issue confirming your order." });
     }
 }
+
+async function handleEditOrder(sender_psid, payload, customer) {
+     const orderId = parseInt(payload.split(':')[1]);
+     let currentData = customer.conversation_data || {};
+ 
+     if (!isNaN(orderId)) {
+         currentData.orderId = null;
+         await updateCustomerState(customer, 'ORDERING_SELECT_PRODUCT', currentData);
+         await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+     } else {
+         console.warn(`Edit order payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
+         await callSendAPI(sender_psid, { text: "Sorry, there was an issue editing your order." });
+     }
+ }
 
 async function handleCancelOrder(sender_psid, payload, customer) {
     let response;
@@ -372,6 +551,7 @@ async function handleCancelOrder(sender_psid, payload, customer) {
                 response = (num === 1) ? { text: "Okay, your order has been cancelled." } : { text: "Sorry, couldn't find order to cancel." };
             }
             await clearCustomerState(customer);
+            return;
         } catch(error) { console.error(`Error cancelling order ${orderId}:`, error); response = { text: "Sorry, error cancelling." }; }
     } else { response = { text: "Sorry, issue cancelling your order." }; }
     callSendAPI(sender_psid, response);
@@ -382,16 +562,53 @@ async function handleMarkPaidClaimed(sender_psid, payload, customer) {
     const orderId = parseInt(payload.split(':')[1]);
     if (!isNaN(orderId)) {
         try {
-             if (!customer) { console.error(`Cannot mark order ${orderId} paid, customer object invalid.`); response = { text: "Sorry, error finding your record." }; }
-             else {
-                 const [num] = await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id } });
-                 response = (num === 1) ? { text: "Thanks for confirming! We'll verify payment soon." } : { text: "Sorry, couldn't find that order." };
-             }
-        } catch (error) { console.error(`Error marking order ${orderId} paid:`, error); response = { text: "Sorry, error updating payment status." }; }
-    } else { response = { text: "Sorry, couldn't identify which order." }; }
+            if (!customer) {
+                console.error(`Cannot mark order ${orderId} paid, customer object invalid.`);
+                response = { text: "Sorry, error finding your record." };
+            } else {
+                const [num] = await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id } });
+                response = (num === 1) ? { text: "Thanks for confirming! We'll verify payment soon." } : { text: "Sorry, couldn't find that order." };
+                await callSendAPI(sender_psid, response);
+                return;
+            }
+        } catch (error) {
+            console.error(`Error marking order ${orderId} paid:`, error);
+            response = { text: "Sorry, error updating payment status." };
+        }
+    } else {
+        response = { text: "Sorry, couldn't identify which order." };
+    }
     callSendAPI(sender_psid, response);
 }
 
+async function handlePaymentVerified(sender_psid, orderId, customer) {
+    console.error("handlePaymentVerified called with:", sender_psid, orderId, customer);
+    try {
+        const order = await Order.findByPk(orderId);
+        if (!order) {
+            console.error(`Order ${orderId} not found.`);
+            await callSendAPI(sender_psid, { text: "Sorry, couldn't find that order." });
+            return;
+        }
+
+        console.error("handlePaymentVerified order:", order);
+
+        if (order.payment_status !== 'Paid') {
+            console.warn(`Order ${orderId} payment status is not 'Paid'.`);
+            await callSendAPI(sender_psid, { text: "Sorry, payment verification is still pending." });
+            return;
+        }
+
+        const response = { text: "Great news! Your payment has been verified. Thanks for your order!" };
+        console.error("handlePaymentVerified response:", response);
+        console.error("About to call callSendAPI with:", sender_psid, response);
+        await callSendAPI(sender_psid, response);
+        await clearCustomerState(customer);
+    } catch (error) {
+        console.error(`Error handling payment verified for order ${orderId}:`, error);
+        await callSendAPI(sender_psid, { text: "Sorry, there was an error verifying your payment." });
+    }
+}
 
 // --- Send Product Selection Webview Button ---
 // Renamed from sendProductSelection
@@ -428,7 +645,7 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
             type: "template",
             payload: {
                 template_type: "button",
-                text: "Click the button below to browse products and add items to your order.",
+                text: "Click the button below to browse products and add items to your order.\n \nType 'done' when you are finished selecting products.",
                 buttons: [
                     {
                         type: "web_url",
@@ -450,9 +667,12 @@ async function callSendAPI(sender_psid, response) {
     let request_body = { recipient: { id: sender_psid }, message: response };
     const graphApiUrl = `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
     try {
+        console.error("callSendAPI sender_psid:", sender_psid);
+        console.error("callSendAPI response:", response);
         await axios.post(graphApiUrl, request_body);
         console.log('Message sent successfully!');
     } catch (error) {
         console.error("Unable to send message:", error.response?.data || error.message);
     }
+}
 }

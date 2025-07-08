@@ -1,4 +1,5 @@
 require('dotenv').config(); // Ensure environment variables are loaded
+const path = require('path');
 
 module.exports = {
   development: {

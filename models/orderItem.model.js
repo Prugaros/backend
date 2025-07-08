@@ -17,7 +17,7 @@ module.exports = (sequelize, DataTypes) => {
       // OrderItem belongs to one Product
       OrderItem.belongsTo(models.Product, {
         foreignKey: 'product_id',
-        as: 'product' // Alias
+        as: 'orderProduct' // Alias
       });
     }
   }

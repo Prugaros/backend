@@ -1,0 +1,18 @@
+{
+  "development": {
+    "dialect": "sqlite",
+    "storage": "./dev_database.sqlite"
+  },
+  "test": {
+    "username": "process.env.DB_USER_TEST || process.env.DB_USER",
+    "password": "process.env.DB_PASSWORD_TEST || process.env.DB_PASSWORD",
+    "database": "process.env.DB_NAME_TEST || 'test_db'",
+    "host": "process.env.DB_HOST_TEST || '127.0.0.1'",
+    "dialect": "mysql",
+    "logging": false
+  },
+  "production": {
+    "dialect": "sqlite",
+    "storage": "./dev_database.sqlite"
+  }
+}

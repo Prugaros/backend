@@ -56,7 +56,19 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: true // Default new products to active
-    }
+    },
+    MSRP: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    collectionId: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: 'Collections',
+        key: 'id',
+      }
+    },
     // Timestamps (createdAt, updatedAt) added automatically
   }, {
     sequelize,

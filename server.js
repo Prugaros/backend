@@ -7,7 +7,8 @@ const app = express();
 
 // Middleware
 const corsOptions = {
-  origin: process.env.FRONTEND_URL // Replace with your actual frontend URL
+  origin: process.env.FRONTEND_URL, // Replace with your actual frontend URL
+  credentials: true, // Allow cookies to be sent cross-origin
 };
 app.use(cors(corsOptions)); // Enable Cross-Origin Resource Sharing with options
 app.use(express.json()); // Parse JSON request bodies
@@ -36,6 +37,13 @@ app.use('/api/group-orders', groupOrderRoutes);
 app.use('/api/orders', orderRoutes);
 // Mount the webview routes (prefixed with /api/webview)
 app.use('/api/webview', webviewRoutes); // Mount webview routes
+
+const collectionRoutes = require('./routes/collection.routes');
+app.use('/api/collections', collectionRoutes);
+
+const inventoryRoutes = require('./routes/inventory.routes');
+app.use('/api/inventory', inventoryRoutes);
+
 // Mount the Facebook webhook routes (no auth needed for this endpoint)
 app.use('/api/facebook/webhook', facebookWebhookRoutes);
 
@@ -48,6 +56,10 @@ const PORT = process.env.PORT || 3001;
 db.sequelize.sync() // Sync models with database (consider { force: true } only for dev reset)
   .then(() => {
     console.log('Database synced successfully.');
+
+    // Verify the Product model attributes
+    //console.log('Product model attributes:', db.Product.rawAttributes);
+
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}.`);
     });

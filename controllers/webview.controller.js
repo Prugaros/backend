@@ -42,13 +42,24 @@ exports.getOrderData = async (req, res) => {
              return res.status(403).send({ message: "Cannot determine active group order context." });
         }
 
+        const { name } = req.query;
+        const whereClause = { is_active: true };
+        if (name) {
+            whereClause.name = { [Op.like]: `%${name}%` };
+        }
+
         const groupOrder = await GroupOrder.findByPk(groupOrderId, {
             include: [{
                 model: Product,
                 as: 'products',
-                where: { is_active: true },
+                where: whereClause,
                 required: false,
-                attributes: ['id', 'name', 'description', 'price', 'image_url']
+                attributes: ['id', 'name', 'description', 'price', 'image_url', 'collectionId'],
+                include: [{
+                    model: db.Collection,
+                    as: 'collection',
+                    attributes: ['Name', 'DisplayOrder']
+                }]
             }]
         });
 

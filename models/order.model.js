@@ -31,6 +31,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'order_id',
         as: 'orderItems'
       });
+      Order.hasMany(models.PurchaseOrderItem, {
+        foreignKey: 'purchase_order_id',
+        as: 'purchaseOrderItems'
+      });
     }
   }
   Order.init({
@@ -75,30 +79,9 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: 'Invoice Sent'
     },
     shipping_status: {
-      type: DataTypes.ENUM('Pending', 'Processing', 'Shipped', 'Delivered', 'Issue'),
+      type: DataTypes.ENUM('Pending', 'Processing', 'Packed', 'Shipped', 'Delivered', 'Issue'),
       allowNull: true, // Initially null or pending
       defaultValue: 'Pending'
-    },
-    // Shipping Preparation Fields
-    package_type: {
-      type: DataTypes.ENUM('Poly Small', 'Poly Medium', 'Poly Large', 'Box 6x6x6', 'Box Custom'),
-      allowNull: true
-    },
-    package_length: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: true
-    },
-    package_width: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: true
-    },
-    package_height: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: true
-    },
-    total_weight_oz: {
-      type: DataTypes.DECIMAL(10, 2),
-      allowNull: true // Calculated based on items or set manually
     },
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

@@ -20,6 +20,7 @@ exports.create = async (req, res) => {
     image_url: req.body.image_url, // Assuming URL is provided directly for now
     weight_oz: req.body.weight_oz,
     is_active: req.body.is_active !== undefined ? req.body.is_active : true, // Default to true if not provided
+    quantityInStock: req.body.quantityInStock || 0,
   };
 
   // Save Product in the database
@@ -36,18 +37,30 @@ exports.create = async (req, res) => {
 
 // Retrieve all Products from the database (with optional filtering/searching)
 exports.findAll = async (req, res) => {
-  const { name, activeOnly } = req.query; // Example query params
+  const { searchTerm, activeOnly } = req.query;
   var condition = {};
 
-  if (name) {
-    condition.name = { [Op.like]: `%${name}%` }; // Case-insensitive search
+  if (searchTerm) {
+    condition[Op.or] = [
+      { name: { [Op.like]: `%${searchTerm}%` } },
+      { '$collection.Name$': { [Op.like]: `%${searchTerm}%` } }
+    ];
   }
+
   if (activeOnly === 'true') {
-      condition.is_active = true;
+    condition.is_active = true;
   }
 
   try {
-    const data = await Product.findAll({ where: condition, order: [['name', 'ASC']] }); // Order by name
+    const data = await Product.findAll({
+      where: condition,
+      include: [{
+        model: db.Collection,
+        as: 'collection',
+        required: false // Allow products without a collection to be returned
+      }],
+      order: [['name', 'ASC']]
+    });
     res.send(data);
   } catch (err) {
     res.status(500).send({
@@ -128,6 +141,31 @@ exports.delete = async (req, res) => {
   } catch (err) {
     res.status(500).send({
       message: "Could not delete Product with id=" + id + ": " + err.message,
+    });
+  }
+};
+
+// Get all Products with quantityInStock > 0
+exports.findInStock = async (req, res) => {
+  try {
+    const data = await Product.findAll({
+      where: {
+        quantityInStock: {
+          [Op.gt]: 0
+        }
+      },
+      include: [{
+        model: db.Collection,
+        as: 'collection',
+        required: false // Allow products without a collection to be returned
+      }],
+      order: [['name', 'ASC']]
+    });
+    res.send(data);
+  } catch (err) {
+    res.status(500).send({
+      message:
+        err.message || "Some error occurred while retrieving in stock products.",
     });
   }
 };
