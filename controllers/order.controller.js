@@ -234,7 +234,7 @@ exports.updatePaymentStatus = async (req, res) => {
 
     // Validate the incoming status
     const allowedStatuses = ['Invoice Sent', 'Payment Claimed', 'Paid', 'Error', 'Cancelled'];
-    if (!payment_status || !allowedStatuses.includes(allowedStatuses)) {
+    if (!payment_status || !allowedStatuses.includes(payment_status)) {
         return res.status(400).send({ message: `Invalid payment status provided. Must be one of: ${allowedStatuses.join(', ')}` });
     }
 
