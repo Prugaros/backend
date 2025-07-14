@@ -68,8 +68,6 @@ exports.handleEvent = (req, res) => {
     }
 };
 
-exports.handlePaymentVerified = handlePaymentVerified;
-
 // --- Helper function to get or create customer and their state ---
 async function getCustomerAndState(sender_psid) {
     let [customer, created] = await Customer.findOrCreate({
@@ -465,6 +463,7 @@ async function handleMessage(sender_psid, received_message) {
         callSendAPI(sender_psid, response);
      }
  }
+}
 
 // --- Postback Handler ---
 async function handlePostback(sender_psid, received_postback) {
@@ -675,7 +674,7 @@ async function callSendAPI(sender_psid, response) {
         console.error("Unable to send message:", error.response?.data || error.message);
     }
 }
+exports.handlePaymentVerified = handlePaymentVerified;
 
-}
 
 
