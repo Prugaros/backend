@@ -160,8 +160,6 @@ async function handleMessage(sender_psid, received_message) {
         }
     }
 
-exports.handlePaymentVerified = handlePaymentVerified;
-
     // Handle Regular Text Messages
     if (messageText) {
         console.log(`Handling text message from ${sender_psid}: ${lowerCaseMessageText}`);
@@ -676,3 +674,5 @@ async function callSendAPI(sender_psid, response) {
     }
 }
 }
+
+exports.handlePaymentVerified = handlePaymentVerified;
