@@ -673,6 +673,7 @@ async function callSendAPI(sender_psid, response) {
         console.error("Unable to send message:", error.response?.data || error.message);
     }
 }
+exports.handlePaymentVerified = handlePaymentVerified;
 }
 
-exports.handlePaymentVerified = handlePaymentVerified;
+
