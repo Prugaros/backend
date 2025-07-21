@@ -17,9 +17,9 @@ exports.create = async (req, res) => {
     name: req.body.name,
     description: req.body.description,
     price: req.body.price,
-    image_url: req.body.image_url, // Assuming URL is provided directly for now
+    images: req.body.images || [], // Use 'images' field
     weight_oz: req.body.weight_oz,
-    is_active: req.body.is_active !== undefined ? req.body.is_active : true, // Default to true if not provided
+    is_active: req.body.is_active !== undefined ? req.body.is_active : true,
     quantityInStock: req.body.quantityInStock || 0,
   };
 
@@ -54,12 +54,14 @@ exports.findAll = async (req, res) => {
   try {
     const data = await Product.findAll({
       where: condition,
+      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId'], // Explicitly include 'images'
       include: [{
         model: db.Collection,
         as: 'collection',
         required: false // Allow products without a collection to be returned
       }],
-      order: [['name', 'ASC']]
+      order: [['name', 'ASC']],
+      raw: false // Ensure getters are applied
     });
     res.send(data);
   } catch (err) {
@@ -75,7 +77,10 @@ exports.findOne = async (req, res) => {
   const id = req.params.id;
 
   try {
-    const data = await Product.findByPk(id);
+    const data = await Product.findByPk(id, {
+      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId'], // Explicitly include 'images'
+      raw: false // Ensure getters are applied
+    });
     if (data) {
       res.send(data);
     } else {
@@ -99,8 +104,15 @@ exports.update = async (req, res) => {
       return res.status(400).send({ message: "Data to update can not be empty!" });
   }
 
+  // Ensure images is handled correctly if present in req.body
+  const updateData = { ...req.body };
+  if (updateData.images) {
+    // The setter in the model will handle JSON.stringify
+    updateData.images = updateData.images;
+  }
+
   try {
-    const num = await Product.update(req.body, {
+    const num = await Product.update(updateData, {
       where: { id: id },
     });
 

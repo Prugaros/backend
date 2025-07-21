@@ -76,8 +76,12 @@ typings/
 .env.production
 
 # SQLite database file
-# *.sqlite
-# *.sqlite-journal
+*.sqlite
+*.sqlite-journal
+scrape_results.db
+dev_database.sqlite
+Template dev_database.sqlite
+backend/scripts/dev_database.sqlite
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -111,3 +115,7 @@ dist
 
 # TernJS port file
 .tern-port
+
+
+*.webp
+*.jpg

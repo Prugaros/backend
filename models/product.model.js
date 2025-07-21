@@ -44,9 +44,23 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.DECIMAL(10, 2), // Example: 10 total digits, 2 after decimal
       allowNull: false
     },
-    image_url: {
-      type: DataTypes.STRING, // URL pointing to S3
-      allowNull: true
+    images: {
+      type: DataTypes.TEXT, // Stores JSON string of all image URLs, first one is main
+      allowNull: true,
+      defaultValue: '[]',
+      get() {
+        const rawValue = this.getDataValue('images');
+        console.log("Product.images getter called. Raw value:", rawValue); // Add this log
+        try {
+          return rawValue ? JSON.parse(rawValue) : [];
+        } catch (e) {
+          console.error("Error parsing images JSON in getter:", rawValue, e);
+          return [];
+        }
+      },
+      set(value) {
+        this.setDataValue('images', JSON.stringify(value));
+      }
     },
     weight_oz: {
       type: DataTypes.DECIMAL(10, 2), // Example: Weight in ounces

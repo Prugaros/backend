@@ -83,6 +83,7 @@ async function getCustomerAndState(sender_psid) {
     }
     return customer;
 }
+exports.getCustomerAndState = getCustomerAndState; // Exported
 
 // --- Helper function to update customer state ---
 async function updateCustomerState(customer, newState, newData = null) {
@@ -93,6 +94,7 @@ async function updateCustomerState(customer, newState, newData = null) {
     await customer.save();
     console.log(`Updated state for ${customer.facebook_psid}`);
 }
+exports.updateCustomerState = updateCustomerState; // Exported
 
 // --- Helper function to clear customer state ---
 async function clearCustomerState(customer) {
@@ -101,6 +103,7 @@ async function clearCustomerState(customer) {
     await customer.save();
     console.log(`Cleared state for ${customer.facebook_psid}`);
 }
+exports.clearCustomerState = clearCustomerState; // Exported
 
 
 // --- Message Handler ---
@@ -199,7 +202,7 @@ async function handleMessage(sender_psid, received_message) {
                 if (activeGroupOrders.length === 0) {
                     response = { text: "Sorry, there's no active group order right now." };
                 } else if (activeGroupOrders.length > 1) {
-                    currentData = { customerId: customer.id, currentOrderItems: {}, availableGroupOrders: activeGroupOrders.map(go => ({ id: go.id, name: go.name })) };
+                    currentData = { customerId: customer.id, currentOrderItems: customer.conversation_data?.currentOrderItems || {}, availableGroupOrders: activeGroupOrders.map(go => ({ id: go.id, name: go.name })) };
 
                     let groupOrderOptions = activeGroupOrders.map(go => ({
                         content_type: "text",
@@ -338,74 +341,6 @@ async function handleMessage(sender_psid, received_message) {
         }
         // Handle 'help' command
         
-        // Handle 'Done' - This should now primarily be triggered implicitly when webview closes and sends data
-        else if (lowerCaseMessageText === "done" && currentState === "ORDERING_SELECT_PRODUCT") {
-            if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
-                response = { text: "You haven't added any items via the selection window yet! Click the 'Select Items' button again or type 'cancel'." };
-            } else {
-                try {
-                    let subtotal = 0;
-                    Object.values(currentData.currentOrderItems).forEach(item => { subtotal += item.price * item.quantity; });
-                    let shippingCost = 5.00; // Default shipping cost
-
-                    // Check if customer has existing *paid* orders for the same group order
-                    const existingPaidOrders = await Order.findAll({
-                        where: {
-                            customer_id: currentData.customerId,
-                            group_order_id: currentData.groupOrderId,
-                            payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
-                        }
-                    });
-
-                    // If no existing paid orders, charge shipping
-                    if (existingPaidOrders && existingPaidOrders.length === 0) {
-                        shippingCost = 5.00;
-                    } else {
-                        shippingCost = 0.00; // Set shipping to $0 if existing *paid* order found
-                    }
-
-                    const totalAmount = subtotal + shippingCost;
-
-                    const order = await Order.create({
-                        customer_id: currentData.customerId, group_order_id: currentData.groupOrderId,
-                        total_amount: totalAmount, shipping_cost: shippingCost, payment_status: "Invoice Sent"
-                    });
-                    const orderItemsToCreate = Object.values(currentData.currentOrderItems).map(item => ({
-                        order_id: order.id, product_id: item.productId,
-                        quantity: item.quantity, price_at_order_time: item.price
-                    }));
-                    await OrderItem.bulkCreate(orderItemsToCreate);
-
-                    let invoiceText = `Okay, here's your order summary:\n\n`; // Default text
-                    if (existingPaidOrders && existingPaidOrders.length > 0) {
-                        invoiceText = "Okay, here's the addition to your existing order:\n\n";
-                    }
-
-                    Object.values(currentData.currentOrderItems).forEach(item => {
-                        invoiceText += `- ${item.name} (Qty: ${item.quantity}): $${(item.price * item.quantity).toFixed(2)}\n`;
-                    });
-                    invoiceText += `\nSubtotal: $${subtotal.toFixed(2)}\nShipping: $${shippingCost.toFixed(2)}\nTotal: $${totalAmount.toFixed(2)}`;
-
-                    response = {
-                        text: invoiceText + "\n\nPlease confirm your order details above.",
-                        quick_replies: [
-                            { content_type: "text", title: "👍 Confirm", payload: `CONFIRM_ORDER:${order.id}` },
-                            { content_type: "text", title: "✏️ Edit", payload: `EDIT_ORDER:${order.id}` },
-                            { content_type: "text", title: "❌ Cancel", payload: `CANCEL_ORDER:${order.id}` }
-                        ]
-                    };
-
-                    currentData.orderId = order.id;
-                    // currentData.currentOrderItems = {}; // Clear cart from state
-                    await updateCustomerState(customer, "AWAITING_ORDER_CONFIRMATION", currentData);
-                    await callSendAPI(sender_psid, response);
-                    return;
-                } catch (error) {
-                    console.error("Error finalizing order:", error);
-                    response = { text: "Sorry, there was an error finalizing your order." };
-                }
-            }
-        }
         // Default / Fallback
         else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
             if (lowerCaseMessageText === "confirm") {
@@ -643,15 +578,29 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
         attachment: {
             type: "template",
             payload: {
-                template_type: "button",
-                text: "Click the button below to browse products and add items to your order.\n \nType 'done' when you are finished selecting products.",
-                buttons: [
+                template_type: "generic",
+                elements: [
                     {
-                        type: "web_url",
-                        url: webviewUrl,
-                        title: "Select Items",
-                        webview_height_ratio: "tall",
-                        messenger_extensions: true
+                        title: "Start Your Order",
+                        image_url: "https://via.placeholder.com/300x200?text=Select+Items", // Placeholder image
+                        subtitle: "Click the button below to browse products and add items to your order. Type 'done' when you are finished.",
+                        default_action: {
+                            type: "web_url",
+                            url: webviewUrl,
+                            webview_height_ratio: "tall",
+                            messenger_extensions: true,
+                            fallback_url: webviewUrl // Fallback for older clients
+                        },
+                        buttons: [
+                            {
+                                type: "web_url",
+                                url: webviewUrl,
+                                title: "Select Items",
+                                webview_height_ratio: "tall",
+                                messenger_extensions: true,
+                                fallback_url: webviewUrl
+                            }
+                        ]
                     }
                 ]
             }
@@ -675,6 +624,5 @@ async function callSendAPI(sender_psid, response) {
     }
 }
 exports.handlePaymentVerified = handlePaymentVerified;
-
-
-
+exports.callSendAPI = callSendAPI; // Exported
+exports.sendProductSelectionWebviewButton = sendProductSelectionWebviewButton; // Exported

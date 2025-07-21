@@ -2,6 +2,9 @@ require('dotenv').config(); // Load environment variables from .env file
 const express = require('express');
 const cors = require('cors');
 const db = require('./models'); // Import models/index.js for DB connection
+const path = require('path'); // Add this line
+const multer = require('multer'); // Import multer for error handling
+const fs = require('fs'); // Import file system module
 
 const app = express();
 
@@ -11,8 +14,33 @@ const corsOptions = {
   credentials: true, // Allow cookies to be sent cross-origin
 };
 app.use(cors(corsOptions)); // Enable Cross-Origin Resource Sharing with options
+
+// Import upload routes
+const uploadRoutes = require('./routes/upload.routes');
+
+// Mount upload routes BEFORE general body parsers to ensure Multer handles multipart/form-data
+app.use('/api/upload', uploadRoutes);
+
 app.use(express.json()); // Parse JSON request bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded request bodies
+
+// Set Content-Security-Policy header
+app.use((req, res, next) => {
+  const backendUrl = process.env.VITE_BACKEND_URL;
+  const frontendUrl = process.env.FRONTEND_URL; // Assuming FRONTEND_URL is also set in .env
+  res.setHeader(
+    'Content-Security-Policy',
+    `default-src 'self' ${frontendUrl} ${backendUrl} https://cdn.ngrok.com; ` +
+    `img-src 'self' data: ${backendUrl} https://w3.org; ` + // Allow images from backendUrl
+    `style-src 'self' 'unsafe-inline'; ` +
+    `script-src 'self' 'unsafe-eval' 'unsafe-inline';`
+  );
+  next();
+});
+
+// Serve static files from the 'public' directory using an absolute path
+app.use(express.static(path.join(__dirname, 'public')));
+console.log('Serving static files from:', path.join(__dirname, 'public')); // Add this log
 
 // Simple route for testing
 app.get('/', (req, res) => {
@@ -69,3 +97,21 @@ db.sequelize.sync() // Sync models with database (consider { force: true } only 
     // Consider exiting if DB connection fails critically
     // process.exit(1);
   });
+
+// Multer error handling middleware
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    console.error('Multer error:', err.code, err.message);
+    return res.status(400).send({ message: err.message, code: err.code });
+  }
+  next(err); // Pass other errors to the general error handler
+});
+
+// General error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(err.statusCode || 500).send({
+    message: err.message || 'Something broke!',
+    error: process.env.NODE_ENV === 'production' ? {} : err, // Don't expose stack in production
+  });
+});
