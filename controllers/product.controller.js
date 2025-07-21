@@ -21,6 +21,7 @@ exports.create = async (req, res) => {
     weight_oz: req.body.weight_oz,
     is_active: req.body.is_active !== undefined ? req.body.is_active : true,
     quantityInStock: req.body.quantityInStock || 0,
+    collectionId: req.body.collectionId,
   };
 
   // Save Product in the database
