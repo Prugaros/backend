@@ -83,6 +83,11 @@ module.exports = (sequelize, DataTypes) => {
         key: 'id',
       }
     },
+    collectionProductOrder: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      defaultValue: 0 // Default to 0, will be updated to place at top
+    }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {
     sequelize,

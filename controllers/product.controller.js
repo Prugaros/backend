@@ -24,6 +24,23 @@ exports.create = async (req, res) => {
     collectionId: req.body.collectionId,
   };
 
+  // If a collectionId is provided, set collectionProductOrder to place at the top
+  if (product.collectionId) {
+    try {
+      const maxOrderProduct = await Product.findOne({
+        where: { collectionId: product.collectionId },
+        order: [['collectionProductOrder', 'DESC']],
+        attributes: ['collectionProductOrder'],
+        raw: true,
+      });
+      product.collectionProductOrder = (maxOrderProduct ? maxOrderProduct.collectionProductOrder : -1) + 1;
+    } catch (err) {
+      console.error("Error determining collectionProductOrder:", err);
+      // Fallback to default if error occurs
+      product.collectionProductOrder = 0;
+    }
+  }
+
   // Save Product in the database
   try {
     const data = await Product.create(product);
@@ -55,13 +72,13 @@ exports.findAll = async (req, res) => {
   try {
     const data = await Product.findAll({
       where: condition,
-      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId'], // Explicitly include 'images'
+      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder'], // Explicitly include 'images' and 'collectionProductOrder'
       include: [{
         model: db.Collection,
         as: 'collection',
         required: false // Allow products without a collection to be returned
       }],
-      order: [['name', 'ASC']],
+      order: [['collectionProductOrder', 'DESC'], ['name', 'ASC']], // Order by collectionProductOrder first, then name
       raw: false // Ensure getters are applied
     });
     res.send(data);
@@ -79,7 +96,7 @@ exports.findOne = async (req, res) => {
 
   try {
     const data = await Product.findByPk(id, {
-      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId'], // Explicitly include 'images'
+      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder'], // Explicitly include 'images' and 'collectionProductOrder'
       raw: false // Ensure getters are applied
     });
     if (data) {
@@ -179,6 +196,44 @@ exports.findInStock = async (req, res) => {
     res.status(500).send({
       message:
         err.message || "Some error occurred while retrieving in stock products.",
+    });
+  }
+};
+
+// Update the order of products within a collection
+exports.updateCollectionProductOrder = async (req, res) => {
+  const { collectionId } = req.params;
+  const { productIds } = req.body; // Expect an array of product IDs in the desired order
+
+  if (!collectionId || !productIds || !Array.isArray(productIds)) {
+    return res.status(400).send({ message: "Collection ID and an ordered list of product IDs are required." });
+  }
+
+  try {
+    // Use a transaction to ensure atomicity
+    await db.sequelize.transaction(async (t) => {
+      for (let i = 0; i < productIds.length; i++) {
+        const productId = productIds[i];
+        const newOrder = productIds.length - 1 - i; // Assign order from top (highest value) to bottom (lowest value)
+
+        await Product.update(
+          { collectionProductOrder: newOrder },
+          {
+            where: {
+              id: productId,
+              collectionId: collectionId,
+            },
+            transaction: t,
+          }
+        );
+      }
+    });
+
+    res.send({ message: "Product order updated successfully." });
+  } catch (err) {
+    console.error("Error updating collection product order:", err);
+    res.status(500).send({
+      message: err.message || "Some error occurred while updating product order.",
     });
   }
 };

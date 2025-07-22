@@ -12,4 +12,7 @@ router.post("/", [authJwt.verifyToken], products.create);
 router.put("/:id", [authJwt.verifyToken], products.update);
 router.delete("/:id", [authJwt.verifyToken], products.delete);
 
+// Route to update the order of products within a collection
+router.put("/reorder/:collectionId", [authJwt.verifyToken], products.updateCollectionProductOrder);
+
 module.exports = router;
