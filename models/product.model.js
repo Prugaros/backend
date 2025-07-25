@@ -92,6 +92,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: false,
       unique: true
+    },
+    brand: {
+      type: DataTypes.STRING,
+      allowNull: true
     }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

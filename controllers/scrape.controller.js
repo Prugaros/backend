@@ -22,6 +22,7 @@ exports.upsert = async (req, res) => {
     MSRP: req.body.MSRP,
     collectionId: req.body.collectionId,
     product_url: req.body.product_url,
+    brand: req.body.brand,
   };
 
   try {
