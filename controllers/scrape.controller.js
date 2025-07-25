@@ -15,7 +15,7 @@ exports.upsert = async (req, res) => {
   const productData = {
     name: req.body.name,
     description: req.body.description,
-    price: 0.0,
+    price: req.body.price,
     images: req.body.images || [],
     weight_oz: req.body.weight_oz,
     is_active: req.body.is_active !== undefined ? req.body.is_active : true,
