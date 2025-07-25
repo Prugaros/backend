@@ -42,7 +42,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     price: {
       type: DataTypes.DECIMAL(10, 2), // Example: 10 total digits, 2 after decimal
-      allowNull: false
+      allowNull: true
     },
     images: {
       type: DataTypes.TEXT, // Stores JSON string of all image URLs, first one is main
@@ -87,6 +87,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.INTEGER,
       allowNull: true,
       defaultValue: 0 // Default to 0, will be updated to place at top
+    },
+    product_url: {
+      type: DataTypes.STRING,
+      allowNull: false,
+      unique: true
     }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

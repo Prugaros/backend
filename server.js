@@ -54,9 +54,11 @@ const groupOrderRoutes = require('./routes/groupOrder.routes');
 const facebookWebhookRoutes = require('./routes/facebook.webhook.routes');
 const orderRoutes = require('./routes/order.routes');
 const webviewRoutes = require('./routes/webview.routes'); // Require webview routes
+const scrapeRoutes = require('./routes/scrape.routes');
 
 // Mount the auth routes
 app.use('/api/auth', authRoutes);
+app.use('/api/scrape', scrapeRoutes);
 // Mount the product routes (prefixed with /api/products)
 app.use('/api/products', productRoutes);
 // Mount the group order routes (prefixed with /api/group-orders)
