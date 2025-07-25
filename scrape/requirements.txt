@@ -1,0 +1,4 @@
+httpx
+parsel
+requests
+python-dotenv
