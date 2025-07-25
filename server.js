@@ -15,6 +15,12 @@ const corsOptions = {
 };
 app.use(cors(corsOptions)); // Enable Cross-Origin Resource Sharing with options
 
+// Add a middleware to log all incoming requests
+app.use((req, res, next) => {
+  console.log(`Received request: ${req.method} ${req.url}`);
+  next();
+});
+
 // Import upload routes
 const uploadRoutes = require('./routes/upload.routes');
 
