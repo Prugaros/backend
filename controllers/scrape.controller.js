@@ -71,8 +71,10 @@ exports.findAllProductsStatus = async (req, res) => {
       attributes: ['product_url', 'is_active'],
       raw: true,
     });
+    console.log("Sending product statuses:", data);
     res.send(data);
   } catch (err) {
+    console.error("Error in findAllProductsStatus:", err);
     res.status(500).send({
       message:
         err.message || "Some error occurred while retrieving product statuses.",
