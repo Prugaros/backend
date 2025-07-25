@@ -19,9 +19,12 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB file size limit
+});
 
 // Route for uploading multiple images
-router.post('/image', upload.array('images', 10), uploadController.uploadImages); // 'images' is the field name, 10 is max files
+router.post('/image', upload.array('images', 20), uploadController.uploadImages); // Increased to 20 files
 
 module.exports = router;

@@ -24,11 +24,12 @@ app.use((req, res, next) => {
 // Import upload routes
 const uploadRoutes = require('./routes/upload.routes');
 
-// Mount upload routes BEFORE general body parsers to ensure Multer handles multipart/form-data
-app.use('/api/upload', uploadRoutes);
+// Increase the limit for JSON and URL-encoded bodies
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-app.use(express.json()); // Parse JSON request bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded request bodies
+// Mount upload routes AFTER general body parsers
+app.use('/api/upload', uploadRoutes);
 
 // Set Content-Security-Policy header
 app.use((req, res, next) => {
