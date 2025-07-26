@@ -55,8 +55,8 @@ exports.findAll = async (req, res) => {
         include: [{ // Include associated products
             model: Product,
             as: 'products', // Use the alias defined in the association
-            attributes: ['id', 'name', 'price'], // Select only needed product attributes
-            through: { attributes: [] } // Don't include join table attributes here
+            attributes: ['id', 'name', 'price', 'images'], // Select only needed product attributes
+            through: { model: GroupOrderItem, attributes: [] } // Don't include join table attributes here
         }],
         order: [['createdAt', 'DESC']] // Order by creation date, newest first
     });
@@ -77,8 +77,8 @@ exports.findOne = async (req, res) => {
         include: [{ // Include associated products
             model: Product,
             as: 'products',
-            attributes: ['id', 'name', 'price', 'image_url', 'weight_oz'], // Get more details for single view
-            through: { attributes: [] }
+            attributes: ['id', 'name', 'price', 'images', 'weight_oz'], // Get more details for single view
+            through: { model: GroupOrderItem, attributes: [] }
         }]
     });
     if (data) {
@@ -190,7 +190,7 @@ exports.startOrder = async (req, res) => {
         try {
             // --- Facebook Post Logic ---
             const products = await groupOrder.getProducts({
-                attributes: ['name', 'price', 'image_url', 'description'] // Fetch details needed for post
+                attributes: ['name', 'price', 'images', 'description'] // Fetch details needed for post
             });
 
             // 1. Format the post message (customize as needed)
