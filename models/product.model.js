@@ -23,6 +23,10 @@ module.exports = (sequelize, DataTypes) => {
         otherKey: 'order_id',
         as: 'orders' // Alias for the association
       });
+      Product.belongsTo(models.Brand, {
+        foreignKey: 'brandId',
+        as: 'brand',
+      });
     }
   }
   Product.init({
@@ -93,9 +97,18 @@ module.exports = (sequelize, DataTypes) => {
       allowNull: false,
       unique: true
     },
-    brand: {
-      type: DataTypes.STRING,
-      allowNull: true
+    brandId: {
+      type: DataTypes.INTEGER,
+      references: {
+        model: 'Brands', // 'Brands' is the table name
+        key: 'id',
+      },
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
+    },
+    is_featured: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
     }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

@@ -78,6 +78,9 @@ app.use('/api/webview', webviewRoutes); // Mount webview routes
 const collectionRoutes = require('./routes/collection.routes');
 app.use('/api/collections', collectionRoutes);
 
+const brandRoutes = require('./routes/brand.routes');
+app.use('/api/brands', brandRoutes);
+
 const inventoryRoutes = require('./routes/inventory.routes');
 app.use('/api/inventory', inventoryRoutes);
 

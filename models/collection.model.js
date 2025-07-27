@@ -14,6 +14,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'collectionId',
         as: 'products',
       });
+      Collection.belongsTo(models.Brand, {
+        foreignKey: 'brandId',
+        as: 'brand',
+      });
     }
   }
   Collection.init({
@@ -35,6 +39,19 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.BOOLEAN,
       allowNull: false,
       defaultValue: true
+    },
+    is_featured: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    brandId: {
+      type: DataTypes.INTEGER,
+      references: {
+        model: 'Brands', // 'Brands' is the table name
+        key: 'id',
+      },
+      onUpdate: 'CASCADE',
+      onDelete: 'SET NULL',
     }
   }, {
     sequelize,

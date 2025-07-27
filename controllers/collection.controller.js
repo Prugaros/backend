@@ -16,6 +16,8 @@ exports.create = async (req, res) => {
     Name: req.body.Name,
     DisplayOrder: req.body.DisplayOrder,
     isActive: req.body.isActive !== undefined ? req.body.isActive : true, // Default to true if not provided
+    is_featured: req.body.is_featured !== undefined ? req.body.is_featured : false, // Default to false
+    brandId: req.body.brandId,
   };
 
   // Save Collection in the database
@@ -32,8 +34,14 @@ exports.create = async (req, res) => {
 
 // Retrieve all Collections from the database
 exports.findAll = async (req, res) => {
+  const { brandId } = req.query;
+  const condition = brandId ? { brandId: brandId } : {};
+
   try {
-    const data = await Collection.findAll({ order: [['DisplayOrder', 'ASC']] });
+    const data = await Collection.findAll({ 
+      where: condition,
+      order: [['DisplayOrder', 'ASC']] 
+    });
     res.send(data);
   } catch (err) {
     res.status(500).send({
@@ -153,4 +161,30 @@ exports.saveOrder = async (req, res) => {
       message: err.message || "Error saving collection order."
     });
   }
+};
+
+// Update display order for multiple collections
+exports.updateOrder = async (req, res) => {
+    const { order } = req.body; // order is expected to be an array of collection IDs
+    if (!order || !Array.isArray(order)) {
+        return res.status(400).send({ message: "Invalid order data provided." });
+    }
+
+    try {
+        const transaction = await db.sequelize.transaction();
+        for (let i = 0; i < order.length; i++) {
+            await Collection.update(
+                { DisplayOrder: i },
+                { where: { id: order[i] } },
+                { transaction }
+            );
+        }
+        await transaction.commit();
+        res.send({ message: "Collection order updated successfully." });
+    } catch (err) {
+        await transaction.rollback();
+        res.status(500).send({
+            message: err.message || "Some error occurred while updating collection order."
+        });
+    }
 };

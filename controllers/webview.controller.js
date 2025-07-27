@@ -22,74 +22,159 @@ exports.getOrderData = async (req, res) => {
             return res.status(404).send({ message: "Customer not found." });
         }
 
-        // Allow access even if state isn't exactly ORDERING_SELECT_PRODUCT,
-        // as user might open it while in AWAITING_ADDRESS etc.
-        // We primarily need the groupOrderId from the state data.
         const currentData = customer.conversation_data || {};
         const groupOrderId = currentData.groupOrderId;
 
         if (!groupOrderId) {
-             console.error(`Group Order ID missing from customer state for PSID ${psid}`);
-             // Maybe allow access but show an error message in the webview?
-             return res.status(403).send({ message: "Cannot determine active group order context." });
+            console.error(`Group Order ID missing from customer state for PSID ${psid}`);
+            return res.status(403).send({ message: "Cannot determine active group order context." });
         }
 
-        const { name } = req.query;
-        const whereClause = { is_active: true };
-        if (name) {
-            whereClause.name = { [Op.like]: `%${name}%` };
-        }
-
-        const groupOrder = await GroupOrder.findByPk(groupOrderId, {
-            include: [{
-                model: Product,
-                as: 'products',
-                where: whereClause,
-                required: false,
-                attributes: ['id', 'name', 'description', 'price', 'images', 'collectionId'],
-                include: [{
-                    model: db.Collection,
-                    as: 'collection',
-                    attributes: ['Name', 'DisplayOrder']
-                }],
-            }],
-            raw: false // Ensure getters are applied for the main query and included models
-        });
-
+        const groupOrder = await GroupOrder.findByPk(groupOrderId);
         if (!groupOrder || groupOrder.status !== 'Active') {
             return res.status(404).send({ message: "Active group order not found." });
         }
+
+        // Fetch only brand information initially
+        const brands = await db.Brand.findAll({
+            where: { isActive: true },
+            order: [['displayOrder', 'ASC']],
+            attributes: ['id', 'name'] // Only fetch necessary fields
+        });
 
         // Normalize currentCart before sending to frontend
         const normalizedCurrentCart = {};
         Object.entries(currentData.currentOrderItems || {}).forEach(([productId, itemData]) => {
             normalizedCurrentCart[productId] = typeof itemData === 'object' ? itemData.quantity : itemData;
         });
-        // Ensure products are converted to JSON with getters applied, and explicitly parse images if still a string
-        const productsToSend = groupOrder.products.map(product => {
-            const productJson = product.toJSON({ getters: true });
-            if (typeof productJson.images === 'string') {
-                try {
-                    productJson.images = JSON.parse(productJson.images);
-                } catch (e) {
-                    console.error("Error parsing images string:", e);
-                    productJson.images = []; // Default to empty array on parse error
-                }
-            }
-            return productJson;
-        });
 
-        console.log(`[getOrderData] Products being sent for PSID ${psid}:`, productsToSend);
-        console.log(`[getOrderData] Sending normalized currentCart for PSID ${psid}:`, normalizedCurrentCart);
         res.send({
             groupOrderName: groupOrder.name,
-            products: productsToSend || [],
+            brands: brands,
             currentCart: normalizedCurrentCart
         });
 
     } catch (error) {
-        console.error(`Error fetching webview order data for PSID ${psid}:`, error);
-        res.status(500).send({ message: "Error retrieving order data." });
+        console.error(`Error fetching initial webview order data for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error retrieving initial order data." });
+    }
+};
+
+// Get featured items data
+exports.getFeaturedData = async (req, res) => {
+    try {
+        const featuredCollections = await db.Collection.findAll({
+            where: { is_featured: true, isActive: true, '$brand.isActive$': true },
+            include: [
+                { 
+                    model: db.Product, 
+                    as: 'products', 
+                    where: { is_active: true }, 
+                    required: false 
+                },
+                { 
+                    model: db.Brand, 
+                    as: 'brand', 
+                    attributes: ['name', 'isActive'],
+                    where: { isActive: true }
+                }
+            ],
+            order: [['displayOrder', 'ASC']]
+        });
+
+        // Extract product IDs from the featured collections to exclude them from "other" featured items
+        const productIdsInFeaturedCollections = featuredCollections.flatMap(c => c.products.map(p => p.id));
+
+        const otherFeaturedItems = await db.Product.findAll({
+            where: {
+                is_featured: true,
+                is_active: true,
+                id: { [Op.notIn]: productIdsInFeaturedCollections }, // Exclude products in featured collections
+                '$brand.isActive$': true
+            },
+            include: [
+                { 
+                    model: db.Brand, 
+                    as: 'brand', 
+                    attributes: ['name', 'isActive'],
+                    where: { isActive: true }
+                },
+                {
+                    model: db.Collection,
+                    as: 'collection',
+                    where: { isActive: true },
+                    required: false // Use left join to include products with no collection
+                }
+            ]
+        });
+
+        // Further filter to exclude items whose collection is featured, even if the item itself is marked as featured
+        const finalOtherFeaturedItems = otherFeaturedItems.filter(p => !p.collection || !p.collection.is_featured);
+
+        res.send({
+            featuredCollections: featuredCollections.map(c => c.toJSON()),
+            otherFeaturedItems: finalOtherFeaturedItems.map(p => p.toJSON())
+        });
+    } catch (error) {
+        console.error(`Error fetching featured data:`, error);
+        res.status(500).send({ message: "Error retrieving featured data." });
+    }
+};
+
+// Get data for a specific brand
+exports.getBrandData = async (req, res) => {
+    const brandId = req.params.brandId;
+    if (!brandId) {
+        return res.status(400).send({ message: "Missing Brand ID." });
+    }
+
+    try {
+        const brand = await db.Brand.findByPk(brandId);
+        if (!brand || !brand.isActive) { // Also check if brand is active
+            return res.status(404).send({ message: "Brand not found or is inactive." });
+        }
+
+        // Fetch all collections for the brand, including their products
+        const allCollections = await db.Collection.findAll({
+            where: { brandId: brandId },
+            include: [{
+                model: db.Product,
+                as: 'products',
+                where: { is_active: true },
+                required: false,
+            }],
+            order: [['displayOrder', 'ASC']]
+        });
+
+        // Separate active and inactive collections
+        const activeCollections = allCollections.filter(c => c.isActive);
+        const inactiveCollections = allCollections.filter(c => !c.isActive);
+
+        // Collect all products from inactive collections
+        const productsFromInactiveCollections = inactiveCollections.flatMap(c => c.products || []);
+
+        // Fetch other products that don't belong to any collection
+        const productsWithNoCollection = await db.Product.findAll({
+            where: {
+                brandId: brandId,
+                is_active: true,
+                collectionId: { [Op.is]: null }
+            }
+        });
+
+        // Combine products from inactive collections and those with no collection
+        const otherBrandItems = [...productsFromInactiveCollections, ...productsWithNoCollection];
+
+        const responseData = {
+            ...brand.toJSON(),
+            collections: activeCollections.map(c => c.toJSON()),
+            otherBrandItems: otherBrandItems.map(p => p.toJSON())
+        };
+
+        res.send(responseData);
+    } catch (error) {
+        console.error(`Error fetching brand data for brandId ${brandId}:`, error);
+        res.status(500).send({ message: "Error retrieving brand data." });
     }
 };
 

@@ -61,7 +61,7 @@ exports.findAll = async (req, res) => {
   if (searchTerm) {
     condition[Op.or] = [
       { name: { [Op.like]: `%${searchTerm}%` } },
-      { '$collection.Name$': { [Op.like]: `%${searchTerm}%` } }
+      { '$collection.name$': { [Op.like]: `%${searchTerm}%` } }
     ];
   }
 
@@ -77,6 +77,10 @@ exports.findAll = async (req, res) => {
         model: db.Collection,
         as: 'collection',
         required: false // Allow products without a collection to be returned
+      }, {
+        model: db.Brand,
+        as: 'brand',
+        required: false
       }],
       order: [['collectionProductOrder', 'DESC'], ['name', 'ASC']], // Order by collectionProductOrder first, then name
       raw: false // Ensure getters are applied
@@ -96,8 +100,15 @@ exports.findOne = async (req, res) => {
 
   try {
     const data = await Product.findByPk(id, {
-      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder'], // Explicitly include 'images' and 'collectionProductOrder'
-      raw: false // Ensure getters are applied
+      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder'],
+      include: [{
+        model: db.Collection,
+        as: 'collection' // Use the alias defined in your model associations
+      }, {
+        model: db.Brand,
+        as: 'brand' // Use the alias defined in your model associations
+      }],
+      raw: false // Getters should be applied
     });
     if (data) {
       res.send(data);

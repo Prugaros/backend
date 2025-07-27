@@ -19,4 +19,7 @@ router.delete("/:id", collections.delete);
 // Save the collection order
 router.post("/order", collections.saveOrder);
 
+// Update the collection order
+router.post("/update-order", collections.updateOrder);
+
 module.exports = router;
