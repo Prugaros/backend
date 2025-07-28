@@ -112,12 +112,12 @@ exports.clearCustomerState = clearCustomerState; // Exported
 // --- Referral Handler ---
 async function handleReferral(sender_psid, referral) {
     console.log(`Handling referral with ref: ${referral.ref}`);
+    // When a user clicks a m.me link with a ref, trigger the message handler
+    // with a special payload. This integrates better with the existing state machine.
     if (referral.ref && referral.ref.startsWith('go_')) {
-        const groupOrderId = parseInt(referral.ref.split('_')[1]);
-        if (!isNaN(groupOrderId)) {
-            let customer = await getCustomerAndState(sender_psid);
-            await startOrderFlow(sender_psid, customer, groupOrderId);
-        }
+        const groupOrderId = referral.ref.split('_')[1];
+        const fakeMessage = { text: `__ORDER_REF__:${groupOrderId}` };
+        await handleMessage(sender_psid, fakeMessage);
     }
 }
 
@@ -174,6 +174,15 @@ async function handleMessage(sender_psid, received_message) {
     let customer = await getCustomerAndState(sender_psid);
     let currentState = customer.conversation_state || 'INITIAL';
     let currentData = customer.conversation_data;
+
+    // Handle referral links that are passed in as special messages
+    if (messageText && messageText.startsWith('__ORDER_REF__:')) {
+        const groupOrderId = parseInt(messageText.split(':')[1]);
+        if (!isNaN(groupOrderId)) {
+            await startOrderFlow(sender_psid, customer, groupOrderId);
+            return; // Referral handled, exit function
+        }
+    }
 
     // Handle Text Quick Replies
     if (quickReplyPayload) {
@@ -462,12 +471,10 @@ async function handlePostback(sender_psid, received_postback) {
     // Handle m.me link referral for new users
     if (referral && referral.ref && referral.ref.startsWith('go_')) {
         console.log(`Handling referral from m.me link with ref: ${referral.ref}`);
-        const groupOrderId = parseInt(referral.ref.split('_')[1]);
-        if (!isNaN(groupOrderId)) {
-            let customer = await getCustomerAndState(sender_psid);
-            await startOrderFlow(sender_psid, customer, groupOrderId);
-            return; // Referral handled, exit
-        }
+        const groupOrderId = referral.ref.split('_')[1];
+        const fakeMessage = { text: `__ORDER_REF__:${groupOrderId}` };
+        await handleMessage(sender_psid, fakeMessage);
+        return; // Referral handled, exit
     }
 
     let customer = await getCustomerAndState(sender_psid);
