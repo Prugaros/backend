@@ -54,7 +54,7 @@ module.exports = (sequelize, DataTypes) => {
       defaultValue: '[]',
       get() {
         const rawValue = this.getDataValue('images');
-        console.log("Product.images getter called. Raw value:", rawValue); // Add this log
+        // console.log("Product.images getter called. Raw value:", rawValue); // Add this log
         try {
           return rawValue ? JSON.parse(rawValue) : [];
         } catch (e) {
@@ -107,6 +107,10 @@ module.exports = (sequelize, DataTypes) => {
       onDelete: 'SET NULL',
     },
     is_featured: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    },
+    is_blacklisted: {
       type: DataTypes.BOOLEAN,
       defaultValue: false
     }

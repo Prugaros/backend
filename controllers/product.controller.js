@@ -55,7 +55,7 @@ exports.create = async (req, res) => {
 
 // Retrieve all Products from the database (with optional filtering/searching)
 exports.findAll = async (req, res) => {
-  const { searchTerm, activeOnly } = req.query;
+  const { searchTerm, activeOnly, is_blacklisted } = req.query;
   var condition = {};
 
   if (searchTerm) {
@@ -69,10 +69,17 @@ exports.findAll = async (req, res) => {
     condition.is_active = true;
   }
 
+  // Handle the is_blacklisted filter
+  if (is_blacklisted === 'true') {
+    condition.is_blacklisted = true;
+  } else {
+    condition.is_blacklisted = false;
+  }
+
   try {
     const data = await Product.findAll({
       where: condition,
-      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder'], // Explicitly include 'images' and 'collectionProductOrder'
+      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder', 'is_blacklisted', 'is_featured', 'product_url'], // Explicitly include 'images' and 'collectionProductOrder'
       include: [{
         model: db.Collection,
         as: 'collection',

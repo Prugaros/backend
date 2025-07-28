@@ -54,6 +54,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true,
       comment: 'ID of the announcement post on Facebook'
+    },
+    custom_message: {
+      type: DataTypes.TEXT,
+      allowNull: true
     }
     // Optional: created_by_admin_id (INTEGER, foreign key to AdminUser)
     // Timestamps (createdAt, updatedAt) added automatically

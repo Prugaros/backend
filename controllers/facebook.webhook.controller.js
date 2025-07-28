@@ -49,7 +49,10 @@ exports.handleEvent = (req, res) => {
             }
             console.log('Sender PSID: ' + sender_psid);
 
-            if (webhook_event.message) {
+            if (webhook_event.referral) {
+                console.log('Event Type: Referral');
+                handleReferral(sender_psid, webhook_event.referral);
+            } else if (webhook_event.message) {
                 console.log('Event Type: Message');
                 handleMessage(sender_psid, webhook_event.message);
             } else if (webhook_event.postback) {
@@ -105,6 +108,56 @@ async function clearCustomerState(customer) {
 }
 exports.clearCustomerState = clearCustomerState; // Exported
 
+
+// --- Referral Handler ---
+async function handleReferral(sender_psid, referral) {
+    console.log(`Handling referral with ref: ${referral.ref}`);
+    if (referral.ref && referral.ref.startsWith('go_')) {
+        const groupOrderId = parseInt(referral.ref.split('_')[1]);
+        if (!isNaN(groupOrderId)) {
+            let customer = await getCustomerAndState(sender_psid);
+            await startOrderFlow(sender_psid, customer, groupOrderId);
+        }
+    }
+}
+
+// --- Specific Order Flow Starter ---
+async function startOrderFlow(sender_psid, customer, groupOrderId) {
+    let response;
+    let currentData = customer.conversation_data || {};
+
+    try {
+        const groupOrder = await GroupOrder.findByPk(groupOrderId);
+        if (!groupOrder || groupOrder.status !== 'Active') {
+            response = { text: "Sorry, this group order is no longer active." };
+            await callSendAPI(sender_psid, response);
+            await clearCustomerState(customer);
+            return;
+        }
+
+        currentData = { customerId: customer.id, groupOrderId: groupOrder.id, currentOrderItems: {} };
+        if (customer.name && customer.email && customer.street_address && customer.city && customer.state && customer.zip) {
+            await updateCustomerState(customer, "ORDERING_CHECK_ADDRESS", currentData);
+            response = {
+                text: `Welcome back, ${customer.name}!\nIs this info still correct?\n\nEmail: ${customer.email}\nAddress: ${customer.street_address}, ${customer.city}, ${customer.state} ${customer.zip}`,
+                quick_replies: [
+                    { content_type: "text", title: "Yes", payload: "CONFIRM_ADDRESS_YES" },
+                    { content_type: "text", title: "No", payload: "CONFIRM_ADDRESS_NO" }
+                ]
+            };
+        } else {
+            await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS", currentData);
+            response = { text: "To start your order, please provide your details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
+        }
+        if (response) {
+            callSendAPI(sender_psid, response);
+        }
+    } catch (error) {
+        console.error(`Error starting order flow for group order ${groupOrderId}:`, error);
+        response = { text: "Sorry, something went wrong while starting your order." };
+        callSendAPI(sender_psid, response);
+    }
+}
 
 // --- Message Handler ---
 async function handleMessage(sender_psid, received_message) {
@@ -404,6 +457,19 @@ async function handleMessage(sender_psid, received_message) {
 async function handlePostback(sender_psid, received_postback) {
     let response;
     const payload = received_postback.payload;
+    const referral = received_postback.referral; // Check for referral for new users
+
+    // Handle m.me link referral for new users
+    if (referral && referral.ref && referral.ref.startsWith('go_')) {
+        console.log(`Handling referral from m.me link with ref: ${referral.ref}`);
+        const groupOrderId = parseInt(referral.ref.split('_')[1]);
+        if (!isNaN(groupOrderId)) {
+            let customer = await getCustomerAndState(sender_psid);
+            await startOrderFlow(sender_psid, customer, groupOrderId);
+            return; // Referral handled, exit
+        }
+    }
+
     let customer = await getCustomerAndState(sender_psid);
     let currentState = customer.conversation_state || 'INITIAL';
     let currentData = customer.conversation_data || {};

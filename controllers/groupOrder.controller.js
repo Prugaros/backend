@@ -1,9 +1,13 @@
 const db = require("../models");
 const GroupOrder = db.GroupOrder;
 const Product = db.Product; // Needed for associating products
+const Collection = db.Collection; // Needed for checking featured status
 const GroupOrderItem = db.GroupOrderItem; // Needed for managing associations
 const { Op } = require("sequelize");
 const axios = require('axios'); // For making HTTP requests (e.g., to Facebook API)
+const fs = require('fs');
+const path = require('path');
+const FormData = require('form-data');
 
 // Create and Save a new GroupOrder
 exports.create = async (req, res) => {
@@ -19,6 +23,7 @@ exports.create = async (req, res) => {
     start_date: req.body.start_date || null,
     end_date: req.body.end_date || null,
     status: req.body.status || 'Draft', // Default to Draft
+    custom_message: req.body.custom_message || null,
     // facebook_post_id will be set later when 'started'
   };
 
@@ -185,62 +190,115 @@ exports.startOrder = async (req, res) => {
             return res.status(400).send({ message: `Group Order is not in Draft status.` });
         }
 
-        let facebookPostId = null; // Initialize placeholder
+        let facebookPostId = null;
 
         try {
-            // --- Facebook Post Logic ---
-            const products = await groupOrder.getProducts({
-                attributes: ['name', 'price', 'images', 'description'] // Fetch details needed for post
-            });
-
-            // 1. Format the post message (customize as needed)
-            let postMessage = `✨ New Group Order Started: ${groupOrder.name} ✨\n\n`;
-            postMessage += `Order between ${groupOrder.start_date ? groupOrder.start_date.toLocaleDateString() : 'now'} and ${groupOrder.end_date ? groupOrder.end_date.toLocaleDateString() : 'TBD'}.\n\n`;
-            postMessage += `Available items:\n`;
-            products.forEach(p => {
-                postMessage += `- ${p.name} ($${p.price})${p.description ? ': ' + p.description : ''}\n`;
-            });
-            postMessage += `\nDM our page to place your order!`;
-
-            // 2. Prepare for API call (Get Page ID and Token from .env)
             const pageId = process.env.FACEBOOK_PAGE_ID;
             const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
-            const graphApiUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`; // Use correct API version
 
             if (!pageId || !accessToken) {
-                console.warn("Facebook Page ID or Access Token missing in .env. Skipping Facebook post.");
+                console.warn("Facebook Page ID or Access Token missing. Skipping post.");
             } else {
-                // 3. Make the API Call (Commented out for safety - requires valid token/permissions)
-                /*
-                console.log("Attempting to post to Facebook:", postMessage);
-                const response = await axios.post(graphApiUrl, {
+                const products = await groupOrder.getProducts({
+                    include: [{
+                        model: Collection,
+                        as: 'collection',
+                        attributes: ['id', 'Name', 'DisplayOrder', 'is_featured']
+                    }],
+                    order: [
+                        [{ model: Collection, as: 'collection' }, 'DisplayOrder', 'ASC'],
+                        ['collectionProductOrder', 'ASC']
+                    ]
+                });
+
+                // Filter for featured products and products in featured collections
+                const featuredProducts = products.filter(p => p.is_featured || (p.collection && p.collection.is_featured));
+
+                // 1. Format the post message
+                let postMessage = `${groupOrder.start_date.toLocaleDateString()}–${groupOrder.end_date.toLocaleDateString()} GROUP ORDER NOW OPEN\n\n`;
+                postMessage += `${groupOrder.custom_message}\n\n`;
+
+                // Add Messenger link. Facebook does not support hyperlink text, but it will make the URL clickable.
+                // The ref parameter can be used by a Messenger bot to direct the user to the correct order flow.
+                const pageUsername = process.env.FACEBOOK_PAGE_USERNAME || 'naomisgrouporders'; // Fallback to the one from your example
+                const messengerRef = `go_${groupOrder.id}`; // "go" for group order
+                const messengerLink = `http://m.me/${pageUsername}?ref=${messengerRef}`;
+                postMessage += `\n\nTo order, message me here: ${messengerLink}`;
+
+                // 2. Select and prepare images for upload
+                const imagesToUpload = featuredProducts;
+
+                const uploadedPhotoIds = [];
+                if (imagesToUpload.length > 0) {
+                    console.log(`Attempting to upload ${imagesToUpload.length} images...`);
+                    const uploadPromises = imagesToUpload.map(async (product) => {
+                        if (product.images && product.images.length > 0) {
+                            const imageName = product.images[0];
+                            const cleanImageName = imageName.split(/[\\/]/).pop();
+                            const imagePath = path.join(__dirname, '..', 'public', 'uploads', 'images', cleanImageName);
+                            
+                            if (fs.existsSync(imagePath)) {
+                                const form = new FormData();
+                                form.append('source', fs.createReadStream(imagePath));
+                                form.append('caption', product.name);
+                                form.append('published', 'false');
+                                form.append('access_token', accessToken);
+
+                                try {
+                                    const response = await axios.post(`https://graph.facebook.com/v19.0/${pageId}/photos`, form, {
+                                        headers: form.getHeaders()
+                                    });
+                                    if (response.data && response.data.id) {
+                                        console.log(`Successfully uploaded image ${cleanImageName}, Photo ID: ${response.data.id}`);
+                                        return { media_fbid: response.data.id };
+                                    }
+                                } catch (uploadError) {
+                                    console.error(`Failed to upload image ${cleanImageName}:`, uploadError.response?.data || uploadError.message);
+                                    return null;
+                                }
+                            } else {
+                                console.warn(`Image file not found, skipping: ${imagePath}`);
+                                return null;
+                            }
+                        }
+                        return null;
+                    });
+
+                    const results = await Promise.all(uploadPromises);
+                    uploadedPhotoIds.push(...results.filter(r => r !== null));
+                }
+
+                // 3. Make the API Call to create the post
+                const graphApiUrl = `https://graph.facebook.com/v19.0/${pageId}/feed`;
+                let postData = {
                     message: postMessage,
                     access_token: accessToken,
-                    // Optional: Add link or image attachments if needed
-                    // link: 'your_website_link',
-                    // attached_media: products.map(p => ({ media_fbid: 'IMAGE_ID_IF_UPLOADED_SEPARATELY' })) // More complex
+                };
+
+                if (uploadedPhotoIds.length > 0) {
+                    postData.attached_media = uploadedPhotoIds;
+                }
+
+                console.log("Attempting to post to Facebook with data:", postData);
+                const response = await axios.post(graphApiUrl, postData, {
+                    headers: { 'Content-Type': 'application/json' }
                 });
 
                 if (response.data && response.data.id) {
-                    facebookPostId = response.data.id; // Store the actual post ID
+                    facebookPostId = response.data.id;
                     console.log("Successfully posted to Facebook. Post ID:", facebookPostId);
                 } else {
                     console.error("Failed to post to Facebook or get post ID:", response.data);
                 }
-                */
-               console.log("Facebook post logic skipped (requires uncommenting and valid credentials/permissions). Message:", postMessage);
             }
-
         } catch (fbError) {
             console.error("Error during Facebook post attempt:", fbError.response?.data || fbError.message);
-            // Decide if failure to post should prevent the order from starting
-            // For now, we'll log the error but continue starting the order in our DB
         }
 
         // --- Update DB Status ---
         groupOrder.status = 'Active';
-        groupOrder.facebook_post_id = facebookPostId; // Store the actual ID later
-        groupOrder.start_date = new Date(); // Set start date when started
+        groupOrder.facebook_post_id = facebookPostId;
+        groupOrder.start_date = new Date();
         await groupOrder.save();
 
         res.send({ message: "Group Order started successfully.", facebookPostId: facebookPostId });
