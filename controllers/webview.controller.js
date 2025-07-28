@@ -285,19 +285,16 @@ exports.updateCart = async (req, res) => {
         }
 
         console.log(`[updateCart] Received cartItems for PSID ${psid}:`, cartItems);
-        let currentOrderItems = currentData.currentOrderItems || {};
-
-        // Normalize incoming cartItems and merge with existing cart
-        Object.entries(cartItems).forEach(([productId, itemData]) => {
-            const quantity = typeof itemData === 'object' ? itemData.quantity : itemData;
+        
+        // Replace the entire cart with the new one from the frontend
+        const newCart = {};
+        Object.entries(cartItems).forEach(([productId, quantity]) => {
             if (!isNaN(quantity) && quantity > 0) {
-                currentOrderItems[productId] = quantity; // Store only quantity
-            } else {
-                delete currentOrderItems[productId]; // Remove if quantity is 0 or invalid
+                newCart[productId] = quantity;
             }
         });
 
-        currentData.currentOrderItems = currentOrderItems;
+        currentData.currentOrderItems = newCart;
         // Update state, keeping the existing state name (e.g., ORDERING_SELECT_PRODUCT)
         await updateCustomerState(customer, customer.conversation_state, currentData);
         console.log(`[updateCart] Saved currentOrderItems for PSID ${psid}:`, currentData.currentOrderItems);
