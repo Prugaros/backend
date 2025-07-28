@@ -181,6 +181,8 @@ exports.delete = async (req, res) => {
 // Start a Group Order (Set status to Active, potentially post to FB later)
 exports.startOrder = async (req, res) => {
     const id = req.params.id;
+    const { postToFacebook } = req.body; // Get the flag from the request body
+
     try {
         const groupOrder = await GroupOrder.findByPk(id);
         if (!groupOrder) {
@@ -192,16 +194,18 @@ exports.startOrder = async (req, res) => {
 
         let facebookPostId = null;
 
-        try {
-            const pageId = process.env.FACEBOOK_PAGE_ID;
-            const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
+        // Only attempt to post if the flag is explicitly true
+        if (postToFacebook === true) {
+            try {
+                const pageId = process.env.FACEBOOK_PAGE_ID;
+                const accessToken = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
 
-            if (!pageId || !accessToken) {
-                console.warn("Facebook Page ID or Access Token missing. Skipping post.");
-            } else {
-                const products = await groupOrder.getProducts({
-                    include: [{
-                        model: Collection,
+                if (!pageId || !accessToken) {
+                    console.warn("Facebook Page ID or Access Token missing. Skipping post.");
+                } else {
+                    const products = await groupOrder.getProducts({
+                        include: [{
+                            model: Collection,
                         as: 'collection',
                         attributes: ['id', 'Name', 'DisplayOrder', 'is_featured']
                     }],
@@ -290,9 +294,13 @@ exports.startOrder = async (req, res) => {
                 } else {
                     console.error("Failed to post to Facebook or get post ID:", response.data);
                 }
+                }
+            } catch (fbError) {
+                console.error("Error during Facebook post attempt:", fbError.response?.data || fbError.message);
+                // Do not block the order from starting if FB post fails
             }
-        } catch (fbError) {
-            console.error("Error during Facebook post attempt:", fbError.response?.data || fbError.message);
+        } else {
+            console.log(`Skipping Facebook post for Group Order ${id} as requested.`);
         }
 
         // --- Update DB Status ---
