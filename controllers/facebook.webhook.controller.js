@@ -580,6 +580,38 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
              await clearCustomerState(await getCustomerAndState(sender_psid));
              return;
         }
+
+        // --- Logic to get the first featured product's image ---
+        let featuredImageUrl = "https://via.placeholder.com/300x200?text=Select+Items"; // Default
+        const featuredCollections = await db.Collection.findAll({
+            where: { is_featured: true, isActive: true, '$brand.isActive$': true },
+            include: [
+                { model: db.Product, as: 'products', where: { is_active: true }, required: false },
+                { model: db.Brand, as: 'brand', attributes: ['name', 'isActive'], where: { isActive: true } }
+            ],
+            order: [['displayOrder', 'ASC']]
+        });
+
+        const firstCollectionWithProducts = featuredCollections.find(c => c.products && c.products.length > 0);
+
+        if (firstCollectionWithProducts) {
+            const firstProduct = firstCollectionWithProducts.products[0];
+            if (firstProduct && firstProduct.images && firstProduct.images.length > 0) {
+                featuredImageUrl = firstProduct.images[0].startsWith('http') ? firstProduct.images[0] : `${process.env.BACKEND_URL}/${firstProduct.images[0]}`;
+            }
+        } else {
+            // Fallback to the first "other" featured item if no collections have products
+            const otherFeaturedItem = await Product.findOne({
+                where: { is_featured: true, is_active: true, '$brand.isActive$': true },
+                include: [{ model: db.Brand, as: 'brand', where: { isActive: true } }],
+                order: [['createdAt', 'DESC']] // Or some other deterministic order
+            });
+            if (otherFeaturedItem && otherFeaturedItem.images && otherFeaturedItem.images.length > 0) {
+                featuredImageUrl = otherFeaturedItem.images[0].startsWith('http') ? otherFeaturedItem.images[0] : `${process.env.BACKEND_URL}/${otherFeaturedItem.images[0]}`;
+            }
+        }
+        // --- End of logic ---
+
     } catch (error) {
          console.error("Error checking group order status before sending webview button:", error);
          await callSendAPI(sender_psid, { text: "Sorry, something went wrong before loading products." });
@@ -594,7 +626,7 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
                 elements: [
                     {
                         title: "Start Your Order",
-                        image_url: "https://via.placeholder.com/300x200?text=Select+Items", // Placeholder image
+                        image_url: featuredImageUrl,
                         subtitle: "Click the button below to browse products and add items to your order. Type 'done' when you are finished.",
                         default_action: {
                             type: "web_url",
