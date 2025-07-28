@@ -189,15 +189,43 @@ exports.finalizeOrder = async (req, res) => {
     try {
         const customer = await getCustomerAndState(psid); // Use the shared getCustomerAndState
         let currentData = customer.conversation_data || {};
+        const cartItems = currentData.currentOrderItems || {};
 
-        if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
+        if (Object.keys(cartItems).length === 0) {
             // If cart is empty, send a message to the user and respond to frontend
             await callSendAPI(psid, { text: "You haven't added any items to your cart. Please add items before submitting your order." });
             return res.status(400).send({ message: "Cart is empty." });
         }
 
+        // Get product details for items in cart
+        const productIds = Object.keys(cartItems);
+        const products = await Product.findAll({
+            where: {
+                id: { [Op.in]: productIds }
+            }
+        });
+
+        const productMap = products.reduce((map, product) => {
+            map[product.id] = product;
+            return map;
+        }, {});
+
         let subtotal = 0;
-        Object.values(currentData.currentOrderItems).forEach(item => { subtotal += item.price * item.quantity; });
+        const detailedOrderItems = Object.entries(cartItems).map(([productId, quantity]) => {
+            const product = productMap[productId];
+            if (!product) {
+                // This case should ideally not happen if cart is synced correctly
+                throw new Error(`Product with ID ${productId} not found.`);
+            }
+            subtotal += parseFloat(product.price) * quantity;
+            return {
+                productId: productId,
+                quantity: quantity,
+                price: product.price,
+                name: product.name
+            };
+        });
+
         let shippingCost = 5.00; // Default shipping cost
 
         // Check if customer has existing *paid* orders for the same group order
@@ -210,22 +238,29 @@ exports.finalizeOrder = async (req, res) => {
         });
 
         // If no existing paid orders, charge shipping
-        if (existingPaidOrders && existingPaidOrders.length === 0) {
-            shippingCost = 5.00;
-        } else {
+        if (existingPaidOrders && existingPaidOrders.length > 0) {
             shippingCost = 0.00; // Set shipping to $0 if existing *paid* order found
+        } else {
+            shippingCost = 5.00;
         }
 
         const totalAmount = subtotal + shippingCost;
 
         const order = await Order.create({
-            customer_id: currentData.customerId, group_order_id: currentData.groupOrderId,
-            total_amount: totalAmount, shipping_cost: shippingCost, payment_status: "Invoice Sent"
+            customer_id: currentData.customerId,
+            group_order_id: currentData.groupOrderId,
+            total_amount: totalAmount,
+            shipping_cost: shippingCost,
+            payment_status: "Invoice Sent"
         });
-        const orderItemsToCreate = Object.values(currentData.currentOrderItems).map(item => ({
-            order_id: order.id, product_id: item.productId,
-            quantity: item.quantity, price_at_order_time: item.price
+
+        const orderItemsToCreate = detailedOrderItems.map(item => ({
+            order_id: order.id,
+            product_id: item.productId,
+            quantity: item.quantity,
+            price_at_order_time: item.price
         }));
+
         await OrderItem.bulkCreate(orderItemsToCreate);
 
         let invoiceText = `Okay, here's your order summary:\n\n`; // Default text
@@ -233,7 +268,7 @@ exports.finalizeOrder = async (req, res) => {
             invoiceText = "Okay, here's the addition to your existing order:\n\n";
         }
 
-        Object.values(currentData.currentOrderItems).forEach(item => {
+        detailedOrderItems.forEach(item => {
             invoiceText += `- ${item.name} (Qty: ${item.quantity}): $${(item.price * item.quantity).toFixed(2)}\n`;
         });
         invoiceText += `\nSubtotal: $${subtotal.toFixed(2)}\nShipping: $${shippingCost.toFixed(2)}\nTotal: $${totalAmount.toFixed(2)}`;
@@ -248,7 +283,19 @@ exports.finalizeOrder = async (req, res) => {
         };
 
         currentData.orderId = order.id;
-        // currentData.currentOrderItems = {}; // Clear cart from state - do not clear here, let the bot handle it after confirmation
+        
+        // Update currentOrderItems in conversation_data to be the detailed version
+        const newCartData = {};
+        detailedOrderItems.forEach(item => {
+            newCartData[item.productId] = {
+                quantity: item.quantity,
+                price: item.price,
+                name: item.name,
+                productId: item.productId // Keep productId for consistency
+            };
+        });
+        currentData.currentOrderItems = newCartData;
+
         await updateCustomerState(customer, "AWAITING_ORDER_CONFIRMATION", currentData);
         await callSendAPI(psid, responseMessage);
 
