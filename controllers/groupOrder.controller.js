@@ -218,11 +218,11 @@ exports.startOrder = async (req, res) => {
                 let postMessage = `${groupOrder.start_date.toLocaleDateString()}–${groupOrder.end_date.toLocaleDateString()} GROUP ORDER NOW OPEN\n\n`;
                 postMessage += `${groupOrder.custom_message}\n\n`;
 
-                // Add Messenger link. Facebook does not support hyperlink text, but it will make the URL clickable.
-                // The ref parameter can be used by a Messenger bot to direct the user to the correct order flow.
-                const pageUsername = process.env.FACEBOOK_PAGE_USERNAME || 'naomisgrouporders'; // Fallback to the one from your example
+                // Add Messenger link. Using the Page ID instead of the username can be more reliable
+                // for triggering the `referral` webhook event.
+                const pageId = process.env.FACEBOOK_PAGE_ID;
                 const messengerRef = `go_${groupOrder.id}`; // "go" for group order
-                const messengerLink = `http://m.me/${pageUsername}?ref=${messengerRef}`;
+                const messengerLink = `http://m.me/${pageId}?ref=${messengerRef}`;
                 postMessage += `\n\nTo order, message me here: ${messengerLink}`;
 
                 // 2. Select and prepare images for upload
