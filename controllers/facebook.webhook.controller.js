@@ -573,6 +573,8 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
         return;
     }
 
+    let featuredImageUrl = "https://via.placeholder.com/300x200?text=Select+Items"; // Default
+
     try {
         const groupOrder = await GroupOrder.findByPk(groupOrderId);
         if (!groupOrder || groupOrder.status !== 'Active') {
@@ -582,7 +584,6 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
         }
 
         // --- Logic to get the first featured product's image ---
-        let featuredImageUrl = "https://via.placeholder.com/300x200?text=Select+Items"; // Default
         const featuredCollections = await db.Collection.findAll({
             where: { is_featured: true, isActive: true, '$brand.isActive$': true },
             include: [
@@ -613,7 +614,7 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
         // --- End of logic ---
 
     } catch (error) {
-         console.error("Error checking group order status before sending webview button:", error);
+         console.error("Error checking group order status or fetching featured image:", error);
          await callSendAPI(sender_psid, { text: "Sorry, something went wrong before loading products." });
          return;
     }
