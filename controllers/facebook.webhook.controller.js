@@ -513,7 +513,7 @@ async function handleMarkPaidClaimed(sender_psid, payload, customer) {
                 response = { text: "Sorry, error finding your record." };
             } else {
                 const [num] = await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id } });
-                response = (num === 1) ? { text: "Thanks for confirming! We'll verify payment soon." } : { text: "Sorry, couldn't find that order." };
+                response = (num === 1) ? { text: "Thanks for confirming! We'll verify payment soon. Be sure to like this page for information on future group orders! https://www.facebook.com/naomisgrouporders" } : { text: "Sorry, couldn't find that order." };
                 await callSendAPI(sender_psid, response);
                 return;
             }
@@ -545,7 +545,7 @@ async function handlePaymentVerified(sender_psid, orderId, customer) {
             return;
         }
 
-        const response = { text: "Great news! Your payment has been verified. Thanks for your order!" };
+        const response = { text: "Great news! Your payment has been verified. Thanks for your order! If you have any questions, please message me here https://m.me/naomi.seijo.2025" };
         console.error("handlePaymentVerified response:", response);
         console.error("About to call callSendAPI with:", sender_psid, response);
         await callSendAPI(sender_psid, response);
