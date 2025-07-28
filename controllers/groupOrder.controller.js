@@ -218,12 +218,12 @@ exports.startOrder = async (req, res) => {
                 let postMessage = `${groupOrder.start_date.toLocaleDateString()}–${groupOrder.end_date.toLocaleDateString()} GROUP ORDER NOW OPEN\n\n`;
                 postMessage += `${groupOrder.custom_message}\n\n`;
 
-                // Add Messenger link. Using the Page ID instead of the username can be more reliable
-                // for triggering the `referral` webhook event.
-                const pageId = process.env.FACEBOOK_PAGE_ID;
-                const messengerRef = `go_${groupOrder.id}`; // "go" for group order
-                const messengerLink = `http://m.me/${pageId}?ref=${messengerRef}`;
-                postMessage += `\n\nTo order, message me here: ${messengerLink}`;
+                // Add Messenger link. The `ref` parameter has proven unreliable.
+                // We will use the `text` parameter to pre-fill the user's chat box with a unique command.
+                const pageUsername = process.env.FACEBOOK_PAGE_USERNAME;
+                const prefilledText = `order`;
+                const messengerLink = `http://m.me/${pageUsername}?text=${encodeURIComponent(prefilledText)}`;
+                postMessage += `\n\nTo order, click here and hit send: ${messengerLink}`;
 
                 // 2. Select and prepare images for upload
                 const imagesToUpload = featuredProducts;
