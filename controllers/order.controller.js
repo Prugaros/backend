@@ -316,8 +316,20 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                     include: [{
                         model: Product,
                         as: 'orderProduct',
-                        attributes: ['id', 'name'],
-                        paranoid: false // Include soft-deleted products
+                        attributes: ['id', 'name', 'brandId', 'collectionId', 'MSRP'],
+                        paranoid: false, // Include soft-deleted products
+                        include: [
+                            {
+                                model: db.Brand,
+                                as: 'brand',
+                                attributes: ['name']
+                            },
+                            {
+                                model: db.Collection,
+                                as: 'collection',
+                                attributes: ['Name']
+                            }
+                        ]
                     }]
                 }
             ]
@@ -329,6 +341,8 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
             for (const item of order.orderItems) {
                 const productId = item.orderProduct.id;
                 const productName = item.orderProduct.name;
+                const brandName = item.orderProduct.brand ? item.orderProduct.brand.name : 'Unknown Brand';
+                const collectionName = item.orderProduct.collection ? item.orderProduct.collection.Name : null;
                 let quantity = item.quantity;
 
                 // Subtract purchased quantities
@@ -351,9 +365,15 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                     if (purchaseList[productId]) {
                         purchaseList[productId].quantity += quantity;
                     } else {
+                        let groupName = brandName;
+                        if (brandName === 'Ohora' && collectionName === 'Disney Store') {
+                            groupName = 'Ohora - Disney Store';
+                        }
                         purchaseList[productId] = {
                             name: productName,
-                            quantity: quantity
+                            quantity: quantity,
+                            group: groupName,
+                            MSRP: item.orderProduct.MSRP
                         };
                     }
                 }
@@ -361,11 +381,22 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
         }
 
         // Convert to array format for easier handling in frontend
-        const purchaseListArray = Object.entries(purchaseList).map(([productId, data]) => ({
+        let purchaseListArray = Object.entries(purchaseList).map(([productId, data]) => ({
             productId,
             name: data.name,
-            quantity: data.quantity
+            quantity: data.quantity,
+            group: data.group,
+            MSRP: data.MSRP
         }));
+
+        // Sort by group name, then by product name
+        purchaseListArray.sort((a, b) => {
+            if (a.group < b.group) return -1;
+            if (a.group > b.group) return 1;
+            if (a.name < b.name) return -1;
+            if (a.name > b.name) return 1;
+            return 0;
+        });
 
         res.send(purchaseListArray);
     } catch (err) {
