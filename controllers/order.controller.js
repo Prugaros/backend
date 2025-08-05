@@ -316,7 +316,7 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                     include: [{
                         model: Product,
                         as: 'orderProduct',
-                        attributes: ['id', 'name', 'brandId', 'collectionId', 'MSRP'],
+                        attributes: ['id', 'name', 'brandId', 'collectionId', 'MSRP', 'product_url'],
                         paranoid: false, // Include soft-deleted products
                         include: [
                             {
@@ -373,7 +373,8 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                             name: productName,
                             quantity: quantity,
                             group: groupName,
-                            MSRP: item.orderProduct.MSRP
+                            MSRP: item.orderProduct.MSRP,
+                            product_url: item.orderProduct.product_url
                         };
                     }
                 }
@@ -386,7 +387,8 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
             name: data.name,
             quantity: data.quantity,
             group: data.group,
-            MSRP: data.MSRP
+            MSRP: data.MSRP,
+            product_url: data.product_url
         }));
 
         // Sort by group name, then by product name
