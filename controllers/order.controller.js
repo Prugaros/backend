@@ -462,7 +462,15 @@ exports.getPurchaseOrdersForGroupOrder = async (req, res) => {
                 {
                     model: PurchaseOrderItem,
                     as: 'purchaseOrderItems',
-                    include: [{ model: Product, as: 'purchasedProduct' }]
+                    include: [{
+                        model: Product,
+                        as: 'purchasedProduct',
+                        include: [{
+                            model: db.Brand,
+                            as: 'brand',
+                            attributes: ['name']
+                        }]
+                    }]
                 }
             ]
         });

@@ -338,3 +338,25 @@ exports.endOrder = async (req, res) => {
         res.status(500).send({ message: "Error closing Group Order with id=" + id + ": " + err.message });
     }
 };
+
+// Reactivate a Group Order (Set status to Active)
+exports.reactivateOrder = async (req, res) => {
+    const id = req.params.id;
+    try {
+        const groupOrder = await GroupOrder.findByPk(id);
+        if (!groupOrder) {
+            return res.status(404).send({ message: `Group Order with id=${id} not found.` });
+        }
+        if (groupOrder.status !== 'Closed') {
+            return res.status(400).send({ message: `Group Order is not Closed.` });
+        }
+
+        groupOrder.status = 'Active';
+        await groupOrder.save();
+
+        res.send({ message: "Group Order reactivated successfully." });
+
+    } catch (err) {
+        res.status(500).send({ message: "Error reactivating Group Order with id=" + id + ": " + err.message });
+    }
+};

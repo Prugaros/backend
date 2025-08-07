@@ -34,5 +34,8 @@ router.post("/:id/start", groupOrders.startOrder);
 // End a Group Order (change status)
 router.post("/:id/end", groupOrders.endOrder);
 
+// Reactivate a Group Order (change status)
+router.put("/:id/reactivate", groupOrders.reactivateOrder);
+
 
 module.exports = router;
