@@ -336,60 +336,68 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
         });
 
         // Aggregate product quantities
-        const purchaseList = {};
+        const requiredQuantities = {};
         for (const order of orders) {
             for (const item of order.orderItems) {
-                const productId = item.orderProduct.id;
-                const productName = item.orderProduct.name;
-                const brandName = item.orderProduct.brand ? item.orderProduct.brand.name : 'Unknown Brand';
-                const collectionName = item.orderProduct.collection ? item.orderProduct.collection.Name : null;
-                let quantity = item.quantity;
+                const product = item.orderProduct;
+                const productId = product.id;
 
-                // Subtract purchased quantities
-                let totalPurchased = await PurchaseOrderItem.sum('quantity', {
-                    where: {
-                        product_id: productId,
-                    },
-                    include: [{
-                        model: PurchaseOrder,
-                        as: 'purchaseOrder',
-                        where: { group_order_id: groupOrderId },
-                        attributes: [] // Exclude attributes from PurchaseOrder
-                    }]
-                });
-
-                totalPurchased = totalPurchased || 0;
-                quantity -= totalPurchased;
-
-                if (quantity > 0) {
-                    if (purchaseList[productId]) {
-                        purchaseList[productId].quantity += quantity;
-                    } else {
-                        let groupName = brandName;
-                        if (brandName === 'Ohora' && collectionName === 'Disney Store') {
-                            groupName = 'Ohora - Disney Store';
-                        }
-                        purchaseList[productId] = {
-                            name: productName,
-                            quantity: quantity,
-                            group: groupName,
-                            MSRP: item.orderProduct.MSRP,
-                            product_url: item.orderProduct.product_url
-                        };
+                if (requiredQuantities[productId]) {
+                    requiredQuantities[productId].quantity += item.quantity;
+                } else {
+                    const brandName = product.brand ? product.brand.name : 'Unknown Brand';
+                    const collectionName = product.collection ? product.collection.Name : null;
+                    let groupName = brandName;
+                    if (brandName === 'Ohora' && collectionName === 'Disney Store') {
+                        groupName = 'Ohora - Disney Store';
                     }
+                    requiredQuantities[productId] = {
+                        name: product.name,
+                        quantity: item.quantity,
+                        group: groupName,
+                        MSRP: product.MSRP,
+                        product_url: product.product_url
+                    };
                 }
             }
         }
 
+        // Get all purchased items for the group order
+        const purchaseOrders = await PurchaseOrder.findAll({
+            where: { group_order_id: groupOrderId },
+            attributes: ['id']
+        });
+        const purchaseOrderIds = purchaseOrders.map(po => po.id);
+
+        const purchasedQuantities = {};
+        if (purchaseOrderIds.length > 0) {
+            const purchaseOrderItems = await PurchaseOrderItem.findAll({
+                where: {
+                    purchase_order_id: { [Op.in]: purchaseOrderIds }
+                }
+            });
+            for (const item of purchaseOrderItems) {
+                if (purchasedQuantities[item.product_id]) {
+                    purchasedQuantities[item.product_id] += item.quantity;
+                } else {
+                    purchasedQuantities[item.product_id] = item.quantity;
+                }
+            }
+        }
+
+        // Subtract purchased quantities from required quantities
+        const purchaseList = Object.entries(requiredQuantities).map(([productId, data]) => {
+            const purchased = purchasedQuantities[productId] || 0;
+            return {
+                productId,
+                ...data,
+                quantity: data.quantity - purchased
+            };
+        }).filter(item => item.quantity > 0);
+
+
         // Convert to array format for easier handling in frontend
-        let purchaseListArray = Object.entries(purchaseList).map(([productId, data]) => ({
-            productId,
-            name: data.name,
-            quantity: data.quantity,
-            group: data.group,
-            MSRP: data.MSRP,
-            product_url: data.product_url
-        }));
+        let purchaseListArray = purchaseList;
 
         // Sort by group name, then by product name
         purchaseListArray.sort((a, b) => {

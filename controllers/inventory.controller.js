@@ -213,14 +213,34 @@ exports.getShipmentIntakeList = async (req, res) => {
       return res.status(404).send({ message: `Group order with id=${groupOrderId} not found.` });
     }
 
-    // Fetch all products associated with the group order
+    // Fetch all products associated with the group order, including Brand and Collection
     const products = await Product.findAll({
-      include: [{
-        model: GroupOrder,
-        as: 'groupOrders',
-        where: { id: groupOrderId },
-        through: { attributes: [] } // Exclude join table attributes
-      }]
+      include: [
+        {
+          model: GroupOrder,
+          as: 'groupOrders',
+          where: { id: groupOrderId },
+          through: { attributes: [] } // Exclude join table attributes
+        },
+        {
+          model: db.Brand,
+          as: 'brand',
+          attributes: ['name', 'DisplayOrder'], // Fetch brand name and DisplayOrder
+          required: false // Don't require a brand to exist
+        },
+        {
+          model: db.Collection,
+          as: 'collection',
+          attributes: ['name', 'DisplayOrder'], // Fetch collection name and DisplayOrder
+          required: false // Don't require a collection to exist
+        }
+      ],
+      order: [
+        [{ model: db.Brand, as: 'brand' }, 'DisplayOrder', 'ASC'], // Sort by brand DisplayOrder
+        [{ model: db.Collection, as: 'collection' }, 'DisplayOrder', 'ASC'], // Sort collections by DisplayOrder
+        ['collectionProductOrder', 'ASC'], // Sort products by collectionProductOrder
+        ['name', 'ASC'] // Fallback sort by product name
+      ]
     });
 
     const shipmentIntakeList = await Promise.all(products.map(async product => {
@@ -240,10 +260,18 @@ exports.getShipmentIntakeList = async (req, res) => {
         const remainingQuantity = Math.max(0, quantity - shipmentIntakeItem);
         const difference = shipmentIntakeItem - quantity;
 
-        return { productId: product.id, name: product.name, quantity: remainingQuantity, receivedQuantity: shipmentIntakeItem, difference: difference };
+        return {
+          productId: product.id,
+          name: product.name,
+          quantity: remainingQuantity,
+          receivedQuantity: shipmentIntakeItem,
+          difference: difference,
+          brand: product.brand, // Include brand data
+          collection: product.collection // Include collection data
+        };
       } catch (err) {
-        console.error(`Error calculating quantity for product ${product.id}:`, err);
-        return { productId: product.id, name: product.name, quantity: 0, receivedQuantity: 0, difference: difference };
+        console.error(`Error calculating quantity for product ${product.id}:`, err, 'Product data:', product.toJSON()); // Log product data
+        return { productId: product.id, name: product.name, quantity: 0, receivedQuantity: 0, difference: difference, brand: null, collection: null };
       }
     }));
 
