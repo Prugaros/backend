@@ -15,6 +15,7 @@ exports.create = async (req, res) => {
   // Create a Product object
   const product = {
     name: req.body.name,
+    product_url: req.body.product_url,
     description: req.body.description,
     price: req.body.price,
     images: req.body.images || [], // Use 'images' field
