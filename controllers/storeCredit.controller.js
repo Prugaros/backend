@@ -37,7 +37,7 @@ exports.addStoreCredit = async (req, res) => {
       const message = {
         text: `You have received a store credit!\n\nAmount: $${amount.toFixed(2)}\nReason: ${reason}\n\nYour new balance is $${newBalance.toFixed(2)}.`
       };
-      await callSendAPI(customer.facebook_psid, message);
+      await callSendAPI(customer.facebook_psid, message, 'POST_PURCHASE_UPDATE');
     }
 
     res.status(201).send(storeCredit);
