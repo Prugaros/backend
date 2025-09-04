@@ -2,7 +2,7 @@ const db = require('../models');
 const StoreCredit = db.StoreCredit;
 const Customer = db.Customer;
 const AdminUser = db.AdminUser;
-const { callSendAPI } = require('./facebook.webhook.controller');
+const { callSendAPI } = require('../utils/facebookApi');
 
 // Add store credit to a customer's account
 exports.addStoreCredit = async (req, res) => {
@@ -41,9 +41,73 @@ exports.addStoreCredit = async (req, res) => {
     }
 
     res.status(201).send(storeCredit);
-  } catch (error) {
-    res.status(500).send({ message: error.message });
-  }
+    } catch (error) {
+      res.status(500).send({ message: error.message });
+    }
+  };
+
+// Apply credit to an order
+exports.applyCreditToOrder = async (orderId, transaction) => {
+    const Order = db.Order;
+    const Customer = db.Customer;
+    const StoreCredit = db.StoreCredit;
+
+    const order = await Order.findByPk(orderId, { transaction });
+    if (order) {
+        const customer = await Customer.findByPk(order.customer_id, { transaction });
+        if (customer && customer.credit > 0) {
+            let totalAmount = parseFloat(order.total_amount);
+            let creditToApply = Math.min(totalAmount, parseFloat(customer.credit));
+
+            if (creditToApply > 0) {
+                order.total_amount = totalAmount - creditToApply;
+                order.applied_credit = creditToApply;
+                await order.save({ transaction });
+
+                customer.credit = parseFloat(customer.credit) - creditToApply;
+                await customer.save({ transaction });
+
+                await StoreCredit.create({
+                    customer_id: customer.id,
+                    amount: -creditToApply,
+                    reason: `Applied to order #${order.id}`,
+                    admin_user_id: 1 // System user
+                }, { transaction });
+
+                return {
+                    appliedCredit: creditToApply,
+                    newTotal: order.total_amount
+                };
+            }
+        }
+    }
+    return {
+        appliedCredit: 0,
+        newTotal: order ? order.total_amount : 0
+    };
+};
+
+// Refund credit for a cancelled order
+exports.refundCreditForCancelledOrder = async (orderId, transaction) => {
+    const Order = db.Order;
+    const Customer = db.Customer;
+    const StoreCredit = db.StoreCredit;
+
+    const order = await Order.findByPk(orderId, { transaction });
+    if (order && order.applied_credit > 0) {
+        const customer = await Customer.findByPk(order.customer_id, { transaction });
+        if (customer) {
+            customer.credit = parseFloat(customer.credit) + parseFloat(order.applied_credit);
+            await customer.save({ transaction });
+
+            await StoreCredit.create({
+                customer_id: order.customer_id,
+                amount: order.applied_credit,
+                reason: `Credit refunded from cancelled order #${order.id}`,
+                admin_user_id: 1 // System user
+            }, { transaction });
+        }
+    }
 };
 
 // Get store credit for a specific customer

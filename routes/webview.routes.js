@@ -23,5 +23,6 @@ router.post("/address", controller.saveAddress);
 // Routes for updating conversation state
 router.post("/submit-address", controller.submitAddress);
 router.post("/payment-sent", controller.paymentSent);
+router.get("/order-summary", controller.getOrderSummary);
 
 module.exports = router;

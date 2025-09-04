@@ -7,11 +7,13 @@ const Order = db.Order;
 const OrderItem = db.OrderItem;
 const GroupOrder = db.GroupOrder;
 const Product = db.Product;
+const sequelize = db.sequelize;
+const { refundCreditForCancelledOrder } = require("./storeCredit.controller");
+const { callSendAPI } = require("../utils/facebookApi");
 const { Op } = require("sequelize");
 
 // Access token and verify token from .env file
 const VERIFY_TOKEN = process.env.FACEBOOK_VERIFY_TOKEN;
-const PAGE_ACCESS_TOKEN = process.env.FACEBOOK_PAGE_ACCESS_TOKEN;
 
 // --- Webhook Verification ---
 exports.verifyWebhook = (req, res) => {
@@ -92,10 +94,10 @@ async function updateCustomerState(customer, newState, newData = null) {
 exports.updateCustomerState = updateCustomerState; // Exported
 
 // --- Helper function to clear customer state ---
-async function clearCustomerState(customer) {
+async function clearCustomerState(customer, transaction = null) {
     customer.conversation_state = 'INITIAL';
     customer.conversation_data = {};
-    await customer.save();
+    await customer.save({ transaction });
 }
 exports.clearCustomerState = clearCustomerState; // Exported
 
@@ -204,8 +206,16 @@ async function handleMessage(sender_psid, received_message) {
     // Handle Regular Text Messages
     if (messageText) {
         if (lowerCaseMessageText === "restart") {
-            if (currentData.orderId) {
-                await Order.update({ payment_status: 'Cancelled' }, { where: { id: currentData.orderId, customer_id: customer.id } });
+            const t = await sequelize.transaction();
+            try {
+                if (currentData.orderId) {
+                    await refundCreditForCancelledOrder(currentData.orderId, t);
+                    await Order.update({ payment_status: 'Cancelled' }, { where: { id: currentData.orderId, customer_id: customer.id }, transaction: t });
+                }
+                await t.commit();
+            } catch (error) {
+                await t.rollback();
+                console.error("Error during restart transaction:", error);
             }
             await clearCustomerState(customer);
             // After clearing state, immediately start the order flow
@@ -493,17 +503,28 @@ async function handleCancelOrder(sender_psid, payload, customer) {
     let currentData = customer.conversation_data || {};
 
     if (!isNaN(orderId) && orderId === currentData.orderId) {
+        const t = await sequelize.transaction();
         try {
             const customerIdForCancel = currentData?.customerId;
-            if (!customerIdForCancel) { console.error(`Cannot cancel order ${orderId}, customer ID missing.`); response = { text: "Sorry, error cancelling." }; }
-            else {
-                const [num] = await Order.update({ payment_status: 'Cancelled' }, { where: { id: orderId, customer_id: customerIdForCancel } });
+            if (!customerIdForCancel) {
+                console.error(`Cannot cancel order ${orderId}, customer ID missing.`);
+                response = { text: "Sorry, error cancelling." };
+            } else {
+                await refundCreditForCancelledOrder(orderId, t);
+                const [num] = await Order.update({ payment_status: 'Cancelled' }, { where: { id: orderId, customer_id: customerIdForCancel }, transaction: t });
                 response = (num === 1) ? { text: "Okay, your order has been cancelled." } : { text: "Sorry, couldn't find order to cancel." };
             }
+            await t.commit();
             await clearCustomerState(customer);
             return;
-        } catch(error) { console.error(`Error cancelling order ${orderId}:`, error); response = { text: "Sorry, error cancelling." }; }
-    } else { response = { text: "Sorry, issue cancelling your order." }; }
+        } catch (error) {
+            await t.rollback();
+            console.error(`Error cancelling order ${orderId}:`, error);
+            response = { text: "Sorry, error cancelling." };
+        }
+    } else {
+        response = { text: "Sorry, issue cancelling your order." };
+    }
     callSendAPI(sender_psid, response);
 }
 
@@ -511,18 +532,31 @@ async function handleMarkPaidClaimed(sender_psid, payload, customer) {
     let response;
     const orderId = parseInt(payload.split(':')[1]);
     if (!isNaN(orderId)) {
+        const t = await sequelize.transaction();
         try {
             if (!customer) {
                 console.error(`Cannot mark order ${orderId} paid, customer object invalid.`);
                 response = { text: "Sorry, error finding your record." };
             } else {
-                const [num] = await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id } });
+                const { appliedCredit, newTotal } = await applyCreditToOrder(orderId, t);
+                const [num] = await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id }, transaction: t });
+
+                if (appliedCredit > 0) {
+                    const message = {
+                        text: `We've applied a credit of $${appliedCredit.toFixed(2)} to your order. Your new total is $${newTotal.toFixed(2)}.`
+                    };
+                    await callSendAPI(sender_psid, message);
+                }
+
                 response = (num === 1) ? { text: "Thanks for confirming! We'll verify payment soon. Be sure to like this page for information on future group orders! https://www.facebook.com/naomisgrouporders" } : { text: "Sorry, couldn't find that order." };
                 await callSendAPI(sender_psid, response);
-                await clearCustomerState(customer);
+                await sendOrderSummaryMessage(sender_psid, orderId);
+                await clearCustomerState(customer, t);
+                await t.commit();
                 return;
             }
         } catch (error) {
+            await t.rollback();
             console.error(`Error marking order ${orderId} paid:`, error);
             response = { text: "Sorry, error updating payment status." };
         }
@@ -652,16 +686,40 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
 }
 
 
-// --- Send API Wrapper ---
-async function callSendAPI(sender_psid, response) {
-    let request_body = { recipient: { id: sender_psid }, message: response };
-    const graphApiUrl = `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
-    try {
-        await axios.post(graphApiUrl, request_body);
-    } catch (error) {
-        console.error("Unable to send message:", error.response?.data || error.message);
+async function sendOrderSummaryMessage(psid, orderId) {
+    const order = await Order.findByPk(orderId, {
+        include: [{
+            model: OrderItem,
+            as: 'orderItems',
+            include: [{
+                model: Product,
+                as: 'orderProduct'
+            }]
+        }]
+    });
+
+    if (!order) {
+        return;
     }
+
+    let summaryText = "Here is your final order summary:\n\n";
+    order.orderItems.forEach(item => {
+        summaryText += `- ${item.orderProduct.name} (Qty: ${item.quantity}): $${(item.quantity * item.price_at_order_time).toFixed(2)}\n`;
+    });
+
+    const subtotal = order.orderItems.reduce((sum, item) => sum + (item.quantity * item.price_at_order_time), 0);
+
+    summaryText += `\nSubtotal: $${subtotal.toFixed(2)}`;
+    summaryText += `\nShipping: $${order.shipping_cost.toFixed(2)}`;
+    if (order.applied_credit > 0) {
+        summaryText += `\nCredit Applied: -$${order.applied_credit.toFixed(2)}`;
+    }
+    summaryText += `\nTotal: $${order.total_amount.toFixed(2)}`;
+
+    await callSendAPI(psid, { text: summaryText });
 }
+
+// --- Send API Wrapper ---
 exports.handlePaymentVerified = handlePaymentVerified;
-exports.callSendAPI = callSendAPI; // Exported
 exports.sendProductSelectionWebviewButton = sendProductSelectionWebviewButton; // Exported
+exports.sendOrderSummaryMessage = sendOrderSummaryMessage;

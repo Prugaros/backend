@@ -4,8 +4,12 @@ const GroupOrder = db.GroupOrder;
 const Product = db.Product;
 const Order = db.Order; // Added
 const OrderItem = db.OrderItem; // Added
+const StoreCredit = db.StoreCredit;
+const sequelize = db.sequelize;
 const { Op } = require("sequelize");
-const { callSendAPI, updateCustomerState, getCustomerAndState, clearCustomerState } = require("./facebook.webhook.controller"); // Import necessary functions
+const { updateCustomerState, getCustomerAndState, clearCustomerState, sendOrderSummaryMessage } = require("./facebook.webhook.controller"); // Import necessary functions
+const { applyCreditToOrder } = require("./storeCredit.controller");
+const { callSendAPI } = require("../utils/facebookApi");
 
 
 // Get data needed for the order webview
@@ -55,8 +59,70 @@ exports.getOrderData = async (req, res) => {
         });
 
     } catch (error) {
-        console.error(`Error fetching initial webview order data for PSID ${psid}:`, error);
-        res.status(500).send({ message: "Error retrieving initial order data." });
+        console.error(`Error in paymentSent for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error processing payment sent." });
+    }
+};
+
+// Get order summary for the payment page
+exports.getOrderSummary = async (req, res) => {
+    const psid = req.query.psid;
+    if (!psid) {
+        return res.status(400).send({ message: "Missing PSID." });
+    }
+    try {
+        const customer = await getCustomerAndState(psid);
+        if (!customer) {
+            return res.status(404).send({ message: "Customer not found." });
+        }
+
+        const currentData = customer.conversation_data || {};
+        const orderId = currentData.orderId;
+
+        if (!orderId) {
+            return res.status(404).send({ message: "Order not found." });
+        }
+
+        const order = await Order.findByPk(orderId, {
+            include: [{
+                model: OrderItem,
+                as: 'orderItems',
+                include: [{
+                    model: Product,
+                    as: 'orderProduct'
+                }]
+            }]
+        });
+
+        if (!order) {
+            return res.status(404).send({ message: "Order not found." });
+        }
+
+        const subtotal = order.orderItems.reduce((sum, item) => sum + (item.quantity * item.price_at_order_time), 0);
+        let totalAmount = subtotal + parseFloat(order.shipping_cost);
+        let appliedCredit = 0;
+
+        if (customer.credit > 0) {
+            appliedCredit = Math.min(totalAmount, parseFloat(customer.credit));
+            totalAmount -= appliedCredit;
+        }
+
+        const orderSummary = {
+            items: order.orderItems.map(item => ({
+                name: item.orderProduct.name,
+                quantity: item.quantity,
+                lineTotal: (item.quantity * item.price_at_order_time).toFixed(2)
+            })),
+            subtotal: subtotal.toFixed(2),
+            shipping: order.shipping_cost.toFixed(2),
+            appliedCredit: appliedCredit.toFixed(2),
+            total: totalAmount.toFixed(2)
+        };
+
+        res.send({ orderSummary });
+    } catch (error) {
+        console.error(`Error fetching order summary for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error retrieving order summary." });
     }
 };
 
@@ -66,15 +132,15 @@ exports.getFeaturedData = async (req, res) => {
         const featuredCollections = await db.Collection.findAll({
             where: { is_featured: true, isActive: true, '$brand.isActive$': true },
             include: [
-                { 
-                    model: db.Product, 
-                    as: 'products', 
-                    where: { is_active: true }, 
-                    required: false 
+                {
+                    model: db.Product,
+                    as: 'products',
+                    where: { is_active: true },
+                    required: false
                 },
-                { 
-                    model: db.Brand, 
-                    as: 'brand', 
+                {
+                    model: db.Brand,
+                    as: 'brand',
                     attributes: ['name', 'isActive'],
                     where: { isActive: true }
                 }
@@ -93,9 +159,9 @@ exports.getFeaturedData = async (req, res) => {
                 '$brand.isActive$': true
             },
             include: [
-                { 
-                    model: db.Brand, 
-                    as: 'brand', 
+                {
+                    model: db.Brand,
+                    as: 'brand',
                     attributes: ['name', 'isActive'],
                     where: { isActive: true }
                 },
@@ -230,12 +296,19 @@ exports.getAddress = async (req, res) => {
             });
 
             const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
-            const totalAmount = subtotal + shippingCost;
+            let totalAmount = subtotal + shippingCost;
+            let appliedCredit = 0;
+
+            if (customer.credit > 0) {
+                appliedCredit = Math.min(totalAmount, parseFloat(customer.credit));
+                totalAmount -= appliedCredit;
+            }
 
             orderSummary = {
                 items: detailedOrderItems,
                 subtotal: subtotal.toFixed(2),
                 shipping: shippingCost.toFixed(2),
+                appliedCredit: appliedCredit.toFixed(2),
                 total: totalAmount.toFixed(2)
             };
         }
@@ -402,15 +475,29 @@ exports.paymentSent = async (req, res) => {
     if (!psid) {
         return res.status(400).send({ message: "Missing PSID." });
     }
+    const t = await sequelize.transaction();
     try {
         const customer = await getCustomerAndState(psid);
         const orderId = customer.conversation_data.orderId;
         if (orderId) {
-            await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id } });
+            const order = await Order.findByPk(orderId, { transaction: t });
+            const { appliedCredit, newTotal } = await applyCreditToOrder(orderId, t);
+            await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id }, transaction: t });
+
+            if (appliedCredit > 0) {
+                const updatedCustomer = await Customer.findByPk(customer.id, { transaction: t });
+                const message = {
+                    text: `You've claimed $${appliedCredit.toFixed(2)} in store credit. You have $${updatedCustomer.credit.toFixed(2)} remaining.`
+                };
+                await callSendAPI(psid, message);
+            }
+            await sendOrderSummaryMessage(psid, orderId);
         }
-        await clearCustomerState(customer);
+        await clearCustomerState(customer, t);
+        await t.commit();
         res.status(200).send({ message: "Payment marked as claimed and state cleared." });
     } catch (error) {
+        await t.rollback();
         console.error(`Error in paymentSent for PSID ${psid}:`, error);
         res.status(500).send({ message: "Error processing payment sent." });
     }
