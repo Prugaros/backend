@@ -108,7 +108,7 @@ exports.findOne = async (req, res) => {
 
   try {
     const data = await Product.findByPk(id, {
-      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder'],
+      attributes: ['id', 'name', 'description', 'price', 'images', 'weight_oz', 'is_active', 'MSRP', 'collectionId', 'collectionProductOrder', 'product_url'],
       include: [{
         model: db.Collection,
         as: 'collection' // Use the alias defined in your model associations
