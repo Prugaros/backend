@@ -17,7 +17,7 @@ app.use(cors(corsOptions)); // Enable Cross-Origin Resource Sharing with options
 
 // Add a middleware to log all incoming requests
 app.use((req, res, next) => {
-  console.log(`Received request: ${req.method} ${req.url}`);
+  //console.log(`Received request: ${req.method} ${req.url}`);
   next();
 });
 
@@ -83,6 +83,12 @@ app.use('/api/brands', brandRoutes);
 
 const inventoryRoutes = require('./routes/inventory.routes');
 app.use('/api/inventory', inventoryRoutes);
+
+const storeCreditRoutes = require('./routes/storeCredit.routes');
+storeCreditRoutes(app);
+
+const refundRoutes = require('./routes/refund.routes');
+refundRoutes(app);
 
 // Mount the Facebook webhook routes (no auth needed for this endpoint)
 app.use('/api/facebook/webhook', facebookWebhookRoutes);

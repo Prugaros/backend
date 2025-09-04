@@ -15,6 +15,13 @@ router.get("/brand-data/:brandId", controller.getBrandData);
 router.post("/update-cart", controller.updateCart);
 
 // Route for the webview to finalize the order and trigger bot's next step
-router.post("/finalize-order", controller.finalizeOrder);
+router.get("/address", controller.getAddress);
+
+// Route for the webview to finalize the order and trigger bot's next step
+router.post("/address", controller.saveAddress);
+
+// Routes for updating conversation state
+router.post("/submit-address", controller.submitAddress);
+router.post("/payment-sent", controller.paymentSent);
 
 module.exports = router;

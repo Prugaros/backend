@@ -1,4 +1,5 @@
 const db = require("../models");
+const Customer = db.Customer;
 const GroupOrder = db.GroupOrder;
 const Product = db.Product; // Needed for associating products
 const Collection = db.Collection; // Needed for checking featured status
@@ -331,6 +332,16 @@ exports.endOrder = async (req, res) => {
         groupOrder.status = 'Closed';
         groupOrder.end_date = new Date(); // Set end date when closed
         await groupOrder.save();
+
+        // Reset conversation state for all customers in this group order
+        const allCustomers = await Customer.findAll();
+        const customersToReset = allCustomers.filter(c => c.conversation_data && c.conversation_data.groupOrderId === groupOrder.id);
+
+        for (const customer of customersToReset) {
+            customer.conversation_state = 'INITIAL';
+            customer.conversation_data = {};
+            await customer.save();
+        }
 
         res.send({ message: "Group Order closed successfully." });
 

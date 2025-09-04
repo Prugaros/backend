@@ -56,9 +56,27 @@ const ensureUserExists = async (req, res, next) => {
 };
 
 
+const isAdmin = async (req, res, next) => {
+    try {
+        const user = await AdminUser.findByPk(req.userId);
+        if (user && user.role === 'admin') { // Assuming 'role' is a field in your AdminUser model
+            next();
+        } else {
+            res.status(403).send({
+                message: "Require Admin Role!"
+            });
+        }
+    } catch (error) {
+        res.status(500).send({
+            message: "Unable to validate User role!"
+        });
+    }
+};
+
 const authJwt = {
   verifyToken: verifyToken,
-  ensureUserExists: ensureUserExists // Export the existence check as well
+  ensureUserExists: ensureUserExists, // Export the existence check as well
+  isAdmin: isAdmin
 };
 
 module.exports = authJwt;

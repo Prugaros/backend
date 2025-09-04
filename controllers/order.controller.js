@@ -124,6 +124,14 @@ exports.findOne = async (req, res) => {
                         model: Product,
                         as: 'orderProduct' // Include all product details
                     }]
+                },
+                {
+                    model: db.Refund,
+                    as: 'refunds',
+                    include: [{
+                        model: Product,
+                        as: 'product'
+                    }]
                 }
             ]
         });

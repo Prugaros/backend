@@ -14,6 +14,10 @@ module.exports = (sequelize, DataTypes) => {
         foreignKey: 'customer_id',
         as: 'orders' // Alias for the association
       });
+      Customer.hasMany(models.StoreCredit, {
+        foreignKey: 'customer_id',
+        as: 'storeCredits'
+      });
     }
   }
   Customer.init({
@@ -91,6 +95,11 @@ module.exports = (sequelize, DataTypes) => {
     international_address_block: { // Added for international addresses
         type: DataTypes.TEXT,
         allowNull: true
+    },
+    credit: {
+        type: DataTypes.DECIMAL(10, 2),
+        allowNull: false,
+        defaultValue: 0.00
     }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

@@ -5,7 +5,8 @@ module.exports = {
   development: {
     dialect: 'sqlite',
     storage: './dev_database.sqlite', // Path to the database file (will be created in backend/)
-    logging: console.log, // Log SQL queries during development (optional)
+    logging: false,
+    // logging: console.log, // Log SQL queries during development (optional)
     // SQLite does not use username/password/host
     // dialectOptions: { // Example for SQLite if needed
     //   ssl: { // Example for RDS requiring SSL
@@ -26,7 +27,7 @@ module.exports = {
   production: {
     dialect: 'sqlite',
     storage: './dev_database.sqlite', // Path to the database file (will be created in backend/)
-    logging: console.log, // Log SQL queries during development (optional)
+    // logging: console.log, // Log SQL queries during development (optional)
     // SQLite does not use username/password/host
     // dialectOptions: { // Example for SQLite if needed
     //   ssl: { // Example for RDS requiring SSL

@@ -21,7 +21,6 @@ exports.verifyWebhook = (req, res) => {
 
     if (mode && token) {
         if (mode === 'subscribe' && token === VERIFY_TOKEN) {
-            console.log('WEBHOOK_VERIFIED');
             res.status(200).send(challenge);
         } else {
             console.error('Webhook verification failed: Invalid token.');
@@ -39,29 +38,23 @@ exports.handleEvent = (req, res) => {
     if (body.object === 'page') {
         body.entry.forEach(function(entry) {
             let webhook_event = entry.messaging[0];
-            console.log('--- Received Raw Webhook Event ---');
-            console.log(JSON.stringify(webhook_event, null, 2));
 
             let sender_psid = webhook_event.sender.id;
             if (!sender_psid) {
                 console.error("Missing sender PSID in webhook event.");
                 return;
             }
-            console.log('Sender PSID: ' + sender_psid);
 
             if (webhook_event.referral) {
-                console.log('Event Type: Referral');
                 handleReferral(sender_psid, webhook_event.referral);
             } else if (webhook_event.message) {
-                console.log('Event Type: Message');
                 handleMessage(sender_psid, webhook_event.message);
             } else if (webhook_event.postback) {
-                console.log('Event Type: Postback');
                 handlePostback(sender_psid, webhook_event.postback);
             } else if (webhook_event.read) {
-                 console.log('Event Type: Read Receipt');
+                 // console.log('Event Type: Read Receipt');
             } else {
-                console.log("Received unhandled webhook event type:", webhook_event);
+                console.warn("Received unhandled webhook event type:", webhook_event);
             }
         });
         res.status(200).send('EVENT_RECEIVED');
@@ -95,7 +88,6 @@ async function updateCustomerState(customer, newState, newData = null) {
         customer.conversation_data = newData;
     }
     await customer.save();
-    console.log(`Updated state for ${customer.facebook_psid}`);
 }
 exports.updateCustomerState = updateCustomerState; // Exported
 
@@ -104,15 +96,60 @@ async function clearCustomerState(customer) {
     customer.conversation_state = 'INITIAL';
     customer.conversation_data = {};
     await customer.save();
-    console.log(`Cleared state for ${customer.facebook_psid}`);
 }
 exports.clearCustomerState = clearCustomerState; // Exported
+
+
+async function startOrderFlow(sender_psid, customer) {
+    let response;
+    let currentData = customer.conversation_data || {};
+    try {
+        const activeGroupOrders = await GroupOrder.findAll({ where: { status: "Active" } });
+        if (activeGroupOrders.length === 0) {
+            response = { text: "Sorry, there's no active group order right now." };
+            await callSendAPI(sender_psid, response);
+        } else if (activeGroupOrders.length > 1) {
+            currentData = {
+                customerId: customer.id,
+                currentOrderItems: customer.conversation_data?.currentOrderItems || {},
+                availableGroupOrders: activeGroupOrders.map(go => ({ id: go.id, name: go.name }))
+            };
+
+            let groupOrderOptions = activeGroupOrders.map(go => ({
+                content_type: "text",
+                title: go.name,
+                payload: `SELECT_GROUP_ORDER:${go.id}`
+            }));
+
+            let messageText = "There are multiple active group orders. Please select one by typing its name or ID, or by using the buttons below:\n\n";
+            activeGroupOrders.forEach(go => {
+                messageText += `- ${go.name} (ID: ${go.id})\n`;
+            });
+
+            response = {
+                text: messageText,
+                quick_replies: groupOrderOptions
+            };
+            await updateCustomerState(customer, "AWAITING_GROUP_ORDER_SELECTION", currentData);
+            await callSendAPI(sender_psid, response);
+        } else {
+            currentData = { customerId: customer.id, groupOrderId: activeGroupOrders[0].id, currentOrderItems: {} };
+            await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
+            response = { text: "Use the button below to start your order. If you get stuck, type `!help`" };
+            await callSendAPI(sender_psid, response);
+            await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+        }
+    } catch (error) {
+        console.error("Error starting order process:", error);
+        response = { text: "Sorry, something went wrong while starting your order." };
+        await callSendAPI(sender_psid, response);
+    }
+}
 
 
 // --- Message Handler ---
 async function handleMessage(sender_psid, received_message) {
     if (received_message.is_echo) {
-        console.log("Ignoring echo message from page.");
         return;
     }
 
@@ -127,8 +164,6 @@ async function handleMessage(sender_psid, received_message) {
 
     // Handle Text Quick Replies
     if (quickReplyPayload) {
-        console.log(`Handling quick reply click with payload: ${quickReplyPayload}`);
-
         if (currentState === "ORDERING_CHECK_ADDRESS") {
             if (quickReplyPayload === "CONFIRM_ADDRESS_YES") {
                 await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
@@ -162,93 +197,69 @@ async function handleMessage(sender_psid, received_message) {
             await handleMarkPaidClaimed(sender_psid, payload, customer);
             return;
         } else {
-            console.log(`Unhandled text quick reply payload: ${quickReplyPayload}`);
+            console.warn(`Unhandled text quick reply payload: ${quickReplyPayload}`);
         }
     }
 
     // Handle Regular Text Messages
     if (messageText) {
-        console.log(`Handling text message from ${sender_psid}: ${lowerCaseMessageText}`);
-        if (lowerCaseMessageText === "help") {
-                    let helpText = "Here are the available commands:\n\n";
-                    if (currentState === "INITIAL") {
-                        helpText += "- order: Start a new order\n";
-                    } else if (currentState === "ORDERING_AWAITING_ADDRESS") {
-                        helpText += "- Provide your details in the format: Full Name, Email, Street Address, City, State, Zip\n";
-                    } else if (currentState === "ORDERING_CHECK_ADDRESS") {
-                        helpText += "- yes - Confirm your address\n";
-                        helpText += "- no - Update your address\n";
-                    } else if (currentState === "ORDERING_SELECT_PRODUCT") {
-                        helpText += "- Use the 'Select Items' button to add products to your order\n";
-                        helpText += "- Type 'done' when you are finished selecting products\n";
-                        helpText += "- restart: Start over with a new order\n";
-                        helpText += "- cart: View your current cart\n";
-                    } else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
-                        helpText += "- confirm: Confirm your order\n";
-                        helpText += "- edit: Edit your order\n";
-                        helpText += "- cancel: Cancel your order\n";
-                    } else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
-                        helpText += "- paid: Confirm your payment\n";
-                        helpText += "- edit: Edit your order\n";
-                        helpText += "- cart: View your current cart\n";
-                    } else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
-                        helpText += "- Select a group order by typing its name or ID, or by using the quick replies\n";
-                    }
-                    response = { text: helpText };
-                    callSendAPI(sender_psid, response);
-                    return;
-                }
+        if (lowerCaseMessageText === "restart") {
+            if (currentData.orderId) {
+                await Order.update({ payment_status: 'Cancelled' }, { where: { id: currentData.orderId, customer_id: customer.id } });
+            }
+            await clearCustomerState(customer);
+            // After clearing state, immediately start the order flow
+            await startOrderFlow(sender_psid, customer);
+            return;
+        }
+
+        if (lowerCaseMessageText === "help" || lowerCaseMessageText === "!help") {
+            let helpText = "Here are the available commands:\n\n";
+            switch (currentState) {
+                case "ORDERING_AWAITING_ADDRESS":
+                    helpText += "- Provide your details in the format: Full Name, Email, Street Address, City, State, Zip\n";
+                    helpText += "- restart: Start over\n";
+                    break;
+                case "ORDERING_CHECK_ADDRESS":
+                    helpText += "- yes - Confirm your address\n";
+                    helpText += "- no - Update your address\n";
+                    helpText += "- restart: Start over\n";
+                    break;
+                case "ORDERING_SELECT_PRODUCT":
+                    helpText += "- Use the 'Select Items' button to build your order.\n";
+                    helpText += "- cart: View your current cart\n";
+                    helpText += "- restart: Start over\n";
+                    break;
+                case "AWAITING_ORDER_CONFIRMATION":
+                    helpText += "- confirm: Confirm your order\n";
+                    helpText += "- edit: Edit your order\n";
+                    helpText += "- cancel: Cancel your order\n";
+                    helpText += "- cart: View your current cart\n";
+                    helpText += "- restart: Start over\n";
+                    break;
+                case "AWAITING_PAYMENT_CONFIRMATION":
+                    helpText += "- paid: Confirm your payment\n";
+                    helpText += "- edit: Edit your order\n";
+                    helpText += "- cart: View your current cart\n";
+                    helpText += "- restart: Start over\n";
+                    break;
+                case "AWAITING_GROUP_ORDER_SELECTION":
+                    helpText += "- Select a group order by typing its name or ID, or by using the quick replies\n";
+                    helpText += "- restart: Start over\n";
+                    break;
+                case "INITIAL":
+                default:
+                    helpText += "- order: Start a new order\n";
+                    break;
+            }
+            response = { text: helpText };
+            callSendAPI(sender_psid, response);
+            return;
+        }
         // Start Order
         else if (lowerCaseMessageText === "order" && currentState === "INITIAL") {
-            try {
-                const activeGroupOrders = await GroupOrder.findAll({ where: { status: "Active" } });
-                if (activeGroupOrders.length === 0) {
-                    response = { text: "Sorry, there's no active group order right now." };
-                } else if (activeGroupOrders.length > 1) {
-                    currentData = { customerId: customer.id, currentOrderItems: customer.conversation_data?.currentOrderItems || {}, availableGroupOrders: activeGroupOrders.map(go => ({ id: go.id, name: go.name })) };
-
-                    let groupOrderOptions = activeGroupOrders.map(go => ({
-                        content_type: "text",
-                        title: go.name,
-                        payload: `SELECT_GROUP_ORDER:${go.id}`
-                    }));
-
-                    let messageText = "There are multiple active group orders. Please select one by typing its name or ID, or by using the buttons below:\n\n";
-                    activeGroupOrders.forEach(go => {
-                        messageText += `- ${go.name} (ID: ${go.id})\n`;
-                    });
-
-                    response = {
-                        text: messageText,
-                        quick_replies: groupOrderOptions
-                    };
-                    await updateCustomerState(customer, "AWAITING_GROUP_ORDER_SELECTION", currentData);
-                    callSendAPI(sender_psid, response);
-                    return;
-                }
-                 else {
-                    currentData = { customerId: customer.id, groupOrderId: activeGroupOrders[0].id, currentOrderItems: {} };
-                    if (customer.name && customer.email && customer.street_address && customer.city && customer.state && customer.zip) {
-                        await updateCustomerState(customer, "ORDERING_CHECK_ADDRESS", currentData);
-                        response = {
-                            text: `Welcome back, ${customer.name}!\nIs this info still correct?\n\nEmail: ${customer.email}\nAddress: ${customer.street_address}, ${customer.city}, ${customer.state} ${customer.zip}`,
-                            quick_replies: [
-                                { content_type: "text", title: "Yes", payload: "CONFIRM_ADDRESS_YES" },
-                                { content_type: "text", title: "No", payload: "CONFIRM_ADDRESS_NO" }
-                            ]
-                        };
-                        // callSendAPI(sender_psid, response);
-                    } else {
-                        await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS", currentData);
-                        response = { text: "To start your order, please provide your details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
-                        // callSendAPI(sender_psid, response);
-                    }
-                }
-            } catch (error) {
-                console.error("Error starting order process:", error);
-                response = { text: "Sorry, something went wrong while starting your order." };
-                 callSendAPI(sender_psid, response);
-            }
+            await startOrderFlow(sender_psid, customer);
+            return;
         } else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
              const selectedGroupOrder = currentData.availableGroupOrders.find(go => (
                 go.name.toLowerCase() === lowerCaseMessageText || String(go.id) === messageText
@@ -256,21 +267,11 @@ async function handleMessage(sender_psid, received_message) {
 
             if (selectedGroupOrder) {
                 currentData.groupOrderId = selectedGroupOrder.id;
-                await updateCustomerState(customer, "ORDERING_CHECK_ADDRESS", currentData);
-                 if (customer.name && customer.email && customer.street_address && customer.city && customer.state && customer.zip) {
-                    response = {
-                        text: `Welcome back, ${customer.name}!\nIs this info still correct?\n\nEmail: ${customer.email}\nAddress: ${customer.street_address}, ${customer.city}, ${customer.state} ${customer.zip}`,
-                            quick_replies: [
-                                { content_type: "text", title: "Yes, looks good!", payload: "CONFIRM_ADDRESS_YES" },
-                                { content_type: "text", title: "No, update it", payload: "CONFIRM_ADDRESS_NO" }
-                            ]
-                        };
-                    // callSendAPI(sender_psid, response);
-                    } else {
-                        await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS", currentData);
-                        response = { text: "To start your order, please provide your details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
-                         // callSendAPI(sender_psid, response);
-                    }
+                await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
+                response = { text: "Use the button below to start your order. If you get stuck, type `!help`" };
+                await callSendAPI(sender_psid, response);
+                await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+                return;
             } else {
                 response = { text: "Sorry, I couldn't find a group order matching that name or ID. Please try again, or type 'help' for available commands." };
                  callSendAPI(sender_psid, response);
@@ -279,7 +280,6 @@ async function handleMessage(sender_psid, received_message) {
         }
         // Handle Address/Info Input
         else if (currentState === "ORDERING_AWAITING_ADDRESS") {
-            console.log("Received potential details:", messageText);
             const parts = messageText.split(",").map(p => p.trim());
             if (parts.length === 6) {
                 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -316,34 +316,17 @@ async function handleMessage(sender_psid, received_message) {
                 response = { text: "Okay, please provide your updated details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
                 await callSendAPI(sender_psid, response);
                 return;
-            } 
-        }
-
-
-
-        // Handle 'cart' command
-        else if (lowerCaseMessageText === "cart" && currentState === "ORDERING_SELECT_PRODUCT") {
-            if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
-                response = { text: "Your cart is empty. Use the 'Select Items' button to add products." };
-            } else {
-                let cartText = "Your current cart:\n";
-                let subtotal = 0;
-                for (const productId in currentData.currentOrderItems) {
-                    const item = currentData.currentOrderItems[productId];
-                    cartText += `- ${item.name} (Qty: ${item.quantity}): $${(item.price * item.quantity).toFixed(2)}\n`;
-                    subtotal += item.price * item.quantity;
-                }
-                cartText += `\nSubtotal: $${subtotal.toFixed(2)}`;
-                response = { text: cartText };
             }
         }
-        // Handle 'restart' during product selection
-        else if (lowerCaseMessageText === "restart" && currentState === "ORDERING_SELECT_PRODUCT") {
-            await clearCustomerState(customer);
-            response = { text: "Okay, let's start over. Please type 'order' to begin." };
+
+
+
+        else if (lowerCaseMessageText === "cart") {
+            await displayCart(sender_psid, currentData);
+            return;
         }
         // Handle 'help' command
-        
+
         // Default / Fallback
         else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
             if (lowerCaseMessageText === "confirm") {
@@ -356,26 +339,12 @@ async function handleMessage(sender_psid, received_message) {
                 await handleCancelOrder(sender_psid, `CANCEL_ORDER:${currentData.orderId}`, customer);
                 return;
             } else {
-                response = { text: "Please confirm, edit, or cancel your order." };
+                response = { text: "Please type 'confirm', 'edit', or 'cancel' for your order." };
             }
-        } 
+        }
 
         else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
-            if (lowerCaseMessageText === "cart") {
-                if (Object.keys(currentData.currentOrderItems || {}).length === 0) {
-                    response = { text: "Your cart is empty." };
-                } else {
-                    let cartText = "Your current cart:\n";
-                    let subtotal = 0;
-                    for (const productId in currentData.currentOrderItems) {
-                        const item = currentData.currentOrderItems[productId];
-                        cartText += `- ${item.name} (Qty: ${item.quantity}): $${(item.price * item.quantity).toFixed(2)}\n`;
-                        subtotal += item.price * item.quantity;
-                    }
-                    cartText += `\nSubtotal: $${subtotal.toFixed(2)}`;
-                response = { text: cartText };
-            }
-            } else if (lowerCaseMessageText === "edit") {
+            if (lowerCaseMessageText === "edit") {
                 await handleEditOrder(sender_psid, `EDIT_ORDER:${currentData.orderId}`, customer);
                 return;
             } else if (lowerCaseMessageText === "paid") {
@@ -387,13 +356,12 @@ async function handleMessage(sender_psid, received_message) {
     }
     // Handle Non-Text Messages
     else if (received_message.attachments) {
-        console.log(`Handling attachment message from ${sender_psid}`);
         response = { text: "Thanks for the attachment! If you want to order, please type 'order'." };
     }
     // Fallback
     else {
-         console.log(`Handling unknown message type from ${sender_psid}`);
-         response = { "text": "Sorry, I didn't understand that." }
+         console.warn(`Handling unknown message type from ${sender_psid}`);
+         response = { "text": "Sorry, I didn't understand that. If you get stuck, type `!help`" }
      }
 
      // Send the response message if one was generated
@@ -411,7 +379,7 @@ async function handlePostback(sender_psid, received_postback) {
 
     // Handle m.me link referral for new users
     if (referral && referral.ref && referral.ref.startsWith('go_')) {
-        console.log(`Referral received on postback, but this flow is deprecated. Ref: ${referral.ref}`);
+        console.warn(`Referral received on postback, but this flow is deprecated. Ref: ${referral.ref}`);
         // The new flow uses ?text=order, so this part is unlikely to be hit.
         // You could optionally trigger the 'order' flow here as a fallback.
     }
@@ -419,8 +387,6 @@ async function handlePostback(sender_psid, received_postback) {
     let customer = await getCustomerAndState(sender_psid);
     let currentState = customer.conversation_state || 'INITIAL';
     let currentData = customer.conversation_data || {};
-
-    console.log(`Handling postback from ${sender_psid} with payload: ${payload}`);
 
     // Add Product - This path should ideally not be used anymore with the webview
     if (payload.startsWith('ADD_PRODUCT:') && currentState === 'ORDERING_SELECT_PRODUCT') {
@@ -437,11 +403,56 @@ async function handlePostback(sender_psid, received_postback) {
     }
     // Fallback
     else {
-        console.log(`Unhandled postback payload: ${payload} in state: ${currentState}`);
+        console.warn(`Unhandled postback payload: ${payload} in state: ${currentState}`);
         response = { "text": `Received: ${payload}` };
     }
 
     if (response) { callSendAPI(sender_psid, response); }
+}
+
+async function displayCart(sender_psid, currentData) {
+    const cartItems = currentData.currentOrderItems || {};
+    if (Object.keys(cartItems).length === 0) {
+        await callSendAPI(sender_psid, { text: "Your cart is empty." });
+        return;
+    }
+
+    let cartText = "Your current cart:\n";
+    let subtotal = 0;
+
+    const productIds = Object.keys(cartItems);
+    const products = await Product.findAll({ where: { id: { [Op.in]: productIds } } });
+    const productMap = products.reduce((map, product) => {
+        map[product.id] = product;
+        return map;
+    }, {});
+
+    for (const productId in cartItems) {
+        const product = productMap[productId];
+        if (product) {
+            const itemData = cartItems[productId];
+            const quantity = typeof itemData === 'object' && itemData !== null ? itemData.quantity : itemData;
+            const price = product.price;
+            const name = product.name;
+
+            cartText += `- ${name} (Qty: ${quantity}): $${(price * quantity).toFixed(2)}\n`;
+            subtotal += price * quantity;
+        }
+    }
+
+    const existingPaidOrders = await Order.findAll({
+        where: {
+            customer_id: currentData.customerId,
+            group_order_id: currentData.groupOrderId,
+            payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
+        }
+    });
+
+    const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+    const totalAmount = subtotal + shippingCost;
+
+    cartText += `\nSubtotal: $${subtotal.toFixed(2)}\nShipping: $${shippingCost.toFixed(2)}\nTotal: $${totalAmount.toFixed(2)}`;
+    await callSendAPI(sender_psid, { text: cartText });
 }
 
 // --- Specific Handler Functions ---
@@ -451,18 +462,11 @@ async function handleConfirmOrder(sender_psid, payload, customer) {
     let currentData = customer.conversation_data || {};
 
     if (!isNaN(orderId) && orderId === currentData.orderId) {
-        let paymentInstructionsText = `Awesome! Please send payment via friends and family to one of these two options:\n\n`;
-        if (process.env.VENMO_USERNAME) { paymentInstructionsText += `Venmo (preferred): ${process.env.VENMO_USERNAME}\n(Last 4 digits: 5176 - Add this if needed)\n\n`; }
-        if (process.env.PAYPAL_EMAIL) { paymentInstructionsText += `or\nPayPal: ${process.env.PAYPAL_EMAIL}\n`; }
-        await callSendAPI(sender_psid, { text: paymentInstructionsText });
-
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const confirmationResponse = {
-            text: "Please click below once you've sent the payment:",
-            quick_replies: [ { content_type: "text", title: "✅ Paid", payload: `MARK_PAID_CLAIMED:${orderId}` } ]
-        };
-        await callSendAPI(sender_psid, confirmationResponse);
+        // This function is likely deprecated by the new webview flow,
+        // but we'll keep it for now and just confirm the order.
+        // The webview should now handle the payment flow.
         await updateCustomerState(customer, 'AWAITING_PAYMENT_CONFIRMATION', currentData);
+        await callSendAPI(sender_psid, { text: "Your order has been confirmed. Please follow the payment instructions in the webview." });
     } else {
         console.warn(`Order confirmation payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
         await callSendAPI(sender_psid, { text: "Sorry, there was an issue confirming your order." });
@@ -472,9 +476,9 @@ async function handleConfirmOrder(sender_psid, payload, customer) {
 async function handleEditOrder(sender_psid, payload, customer) {
      const orderId = parseInt(payload.split(':')[1]);
      let currentData = customer.conversation_data || {};
- 
+
      if (!isNaN(orderId)) {
-         currentData.orderId = null;
+         currentData.orderId = orderId;
          await updateCustomerState(customer, 'ORDERING_SELECT_PRODUCT', currentData);
          await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
      } else {
@@ -515,6 +519,7 @@ async function handleMarkPaidClaimed(sender_psid, payload, customer) {
                 const [num] = await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id } });
                 response = (num === 1) ? { text: "Thanks for confirming! We'll verify payment soon. Be sure to like this page for information on future group orders! https://www.facebook.com/naomisgrouporders" } : { text: "Sorry, couldn't find that order." };
                 await callSendAPI(sender_psid, response);
+                await clearCustomerState(customer);
                 return;
             }
         } catch (error) {
@@ -528,7 +533,6 @@ async function handleMarkPaidClaimed(sender_psid, payload, customer) {
 }
 
 async function handlePaymentVerified(sender_psid, orderId, customer) {
-    console.error("handlePaymentVerified called with:", sender_psid, orderId, customer);
     try {
         const order = await Order.findByPk(orderId);
         if (!order) {
@@ -537,8 +541,6 @@ async function handlePaymentVerified(sender_psid, orderId, customer) {
             return;
         }
 
-        console.error("handlePaymentVerified order:", order);
-
         if (order.payment_status !== 'Paid') {
             console.warn(`Order ${orderId} payment status is not 'Paid'.`);
             await callSendAPI(sender_psid, { text: "Sorry, payment verification is still pending." });
@@ -546,10 +548,7 @@ async function handlePaymentVerified(sender_psid, orderId, customer) {
         }
 
         const response = { text: "Great news! Your payment has been verified. Thanks for your order! If you have any questions, please message me here https://m.me/naomi.seijo.2025" };
-        console.error("handlePaymentVerified response:", response);
-        console.error("About to call callSendAPI with:", sender_psid, response);
         await callSendAPI(sender_psid, response);
-        await clearCustomerState(customer);
     } catch (error) {
         console.error(`Error handling payment verified for order ${orderId}:`, error);
         await callSendAPI(sender_psid, { text: "Sorry, there was an error verifying your payment." });
@@ -628,22 +627,20 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
                     {
                         title: "Start Your Order",
                         image_url: featuredImageUrl,
-                        subtitle: "Click the button below to browse products and add items to your order. Type 'done' when you are finished.",
+                        subtitle: "Click the button below to browse products and add items to your order.",
                         default_action: {
                             type: "web_url",
                             url: webviewUrl,
-                            webview_height_ratio: "tall",
-                            messenger_extensions: true,
-                            fallback_url: webviewUrl // Fallback for older clients
+                            webview_height_ratio: "full",
+                            messenger_extensions: false
                         },
                         buttons: [
                             {
                                 type: "web_url",
                                 url: webviewUrl,
                                 title: "Select Items",
-                                webview_height_ratio: "tall",
-                                messenger_extensions: true,
-                                fallback_url: webviewUrl
+                                webview_height_ratio: "full",
+                                messenger_extensions: false
                             }
                         ]
                     }
@@ -660,10 +657,7 @@ async function callSendAPI(sender_psid, response) {
     let request_body = { recipient: { id: sender_psid }, message: response };
     const graphApiUrl = `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`;
     try {
-        console.error("callSendAPI sender_psid:", sender_psid);
-        console.error("callSendAPI response:", response);
         await axios.post(graphApiUrl, request_body);
-        console.log('Message sent successfully!');
     } catch (error) {
         console.error("Unable to send message:", error.response?.data || error.message);
     }

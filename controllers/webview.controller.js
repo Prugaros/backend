@@ -5,7 +5,7 @@ const Product = db.Product;
 const Order = db.Order; // Added
 const OrderItem = db.OrderItem; // Added
 const { Op } = require("sequelize");
-const { callSendAPI, updateCustomerState, getCustomerAndState } = require("./facebook.webhook.controller"); // Import necessary functions
+const { callSendAPI, updateCustomerState, getCustomerAndState, clearCustomerState } = require("./facebook.webhook.controller"); // Import necessary functions
 
 
 // Get data needed for the order webview
@@ -178,178 +178,240 @@ exports.getBrandData = async (req, res) => {
     }
 };
 
-// Finalize order from webview and trigger bot's next step
-exports.finalizeOrder = async (req, res) => {
-    const psid = req.query.psid; // PSID should be passed as a query parameter
-
+// Get customer address and order summary
+exports.getAddress = async (req, res) => {
+    const psid = req.query.psid;
     if (!psid) {
         return res.status(400).send({ message: "Missing PSID." });
     }
-
     try {
-        const customer = await getCustomerAndState(psid); // Use the shared getCustomerAndState
-        let currentData = customer.conversation_data || {};
+        const customer = await getCustomerAndState(psid);
+        if (!customer) {
+            return res.status(404).send({ message: "Customer not found." });
+        }
+
+        const currentData = customer.conversation_data || {};
         const cartItems = currentData.currentOrderItems || {};
-
-        if (Object.keys(cartItems).length === 0) {
-            // If cart is empty, send a message to the user and respond to frontend
-            await callSendAPI(psid, { text: "You haven't added any items to your cart. Please add items before submitting your order." });
-            return res.status(400).send({ message: "Cart is empty." });
-        }
-
-        // Get product details for items in cart
-        const productIds = Object.keys(cartItems);
-        const products = await Product.findAll({
-            where: {
-                id: { [Op.in]: productIds }
-            }
-        });
-
-        const productMap = products.reduce((map, product) => {
-            map[product.id] = product;
-            return map;
-        }, {});
-
-        let subtotal = 0;
-        const detailedOrderItems = Object.entries(cartItems).map(([productId, quantity]) => {
-            const product = productMap[productId];
-            if (!product) {
-                // This case should ideally not happen if cart is synced correctly
-                throw new Error(`Product with ID ${productId} not found.`);
-            }
-            subtotal += parseFloat(product.price) * quantity;
-            return {
-                productId: productId,
-                quantity: quantity,
-                price: product.price,
-                name: product.name
-            };
-        });
-
-        let shippingCost = 5.00; // Default shipping cost
-
-        // Check if customer has existing *paid* orders for the same group order
-        const existingPaidOrders = await Order.findAll({
-            where: {
-                customer_id: currentData.customerId,
-                group_order_id: currentData.groupOrderId,
-                payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
-            }
-        });
-
-        // If no existing paid orders, charge shipping
-        if (existingPaidOrders && existingPaidOrders.length > 0) {
-            shippingCost = 0.00; // Set shipping to $0 if existing *paid* order found
-        } else {
-            shippingCost = 5.00;
-        }
-
-        const totalAmount = subtotal + shippingCost;
-
-        const order = await Order.create({
-            customer_id: currentData.customerId,
-            group_order_id: currentData.groupOrderId,
-            total_amount: totalAmount,
-            shipping_cost: shippingCost,
-            payment_status: "Invoice Sent"
-        });
-
-        const orderItemsToCreate = detailedOrderItems.map(item => ({
-            order_id: order.id,
-            product_id: item.productId,
-            quantity: item.quantity,
-            price_at_order_time: item.price
-        }));
-
-        await OrderItem.bulkCreate(orderItemsToCreate);
-
-        let invoiceText = `Okay, here's your order summary:\n\n`; // Default text
-        if (existingPaidOrders && existingPaidOrders.length > 0) {
-            invoiceText = "Okay, here's the addition to your existing order:\n\n";
-        }
-
-        detailedOrderItems.forEach(item => {
-            invoiceText += `- ${item.name} (Qty: ${item.quantity}): $${(item.price * item.quantity).toFixed(2)}\n`;
-        });
-        invoiceText += `\nSubtotal: $${subtotal.toFixed(2)}\nShipping: $${shippingCost.toFixed(2)}\nTotal: $${totalAmount.toFixed(2)}`;
-
-        const responseMessage = {
-            text: invoiceText + "\n\nPlease confirm your order details above.",
-            quick_replies: [
-                { content_type: "text", title: "👍 Confirm", payload: `CONFIRM_ORDER:${order.id}` },
-                { content_type: "text", title: "✏️ Edit", payload: `EDIT_ORDER:${order.id}` },
-                { content_type: "text", title: "❌ Cancel", payload: `CANCEL_ORDER:${order.id}` }
-            ]
+        let orderSummary = {
+            items: [],
+            subtotal: 0,
+            shipping: 0,
+            total: 0
         };
 
-        currentData.orderId = order.id;
-        
-        // Update currentOrderItems in conversation_data to be the detailed version
-        const newCartData = {};
-        detailedOrderItems.forEach(item => {
-            newCartData[item.productId] = {
-                quantity: item.quantity,
-                price: item.price,
-                name: item.name,
-                productId: item.productId // Keep productId for consistency
+        if (Object.keys(cartItems).length > 0) {
+            const productIds = Object.keys(cartItems);
+            const products = await Product.findAll({ where: { id: { [Op.in]: productIds } } });
+            const productMap = products.reduce((map, product) => {
+                map[product.id] = product;
+                return map;
+            }, {});
+
+            let subtotal = 0;
+            const detailedOrderItems = Object.entries(cartItems).map(([productId, itemData]) => {
+                const quantity = typeof itemData === 'object' && itemData !== null ? itemData.quantity : itemData;
+                const product = productMap[productId];
+                if (!product) return null;
+                subtotal += parseFloat(product.price) * quantity;
+                return {
+                    name: product.name,
+                    quantity: quantity,
+                    price: product.price,
+                    lineTotal: (parseFloat(product.price) * quantity).toFixed(2)
+                };
+            }).filter(Boolean);
+
+            const existingPaidOrders = await Order.findAll({
+                where: {
+                    customer_id: currentData.customerId,
+                    group_order_id: currentData.groupOrderId,
+                    payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
+                }
+            });
+
+            const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+            const totalAmount = subtotal + shippingCost;
+
+            orderSummary = {
+                items: detailedOrderItems,
+                subtotal: subtotal.toFixed(2),
+                shipping: shippingCost.toFixed(2),
+                total: totalAmount.toFixed(2)
             };
+        }
+
+        res.send({
+            address: {
+                name: customer.name || '',
+                email: customer.email || '',
+                street_address: customer.street_address || '',
+                city: customer.city || '',
+                state: customer.state || '',
+                zip: customer.zip || ''
+            },
+            orderSummary: orderSummary
         });
-        currentData.currentOrderItems = newCartData;
-
-        await updateCustomerState(customer, "AWAITING_ORDER_CONFIRMATION", currentData);
-        await callSendAPI(psid, responseMessage);
-
-        res.status(200).send({ message: "Order finalized and message sent to Messenger." });
-
     } catch (error) {
-        console.error(`Error finalizing order for PSID ${psid}:`, error);
-        res.status(500).send({ message: "Error finalizing order." });
+        console.error(`Error fetching address and order summary for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error retrieving data." });
     }
 };
 
-// Update the user's cart state from the webview
-exports.updateCart = async (req, res) => {
+// Save customer address
+exports.saveAddress = async (req, res) => {
     const psid = req.query.psid;
-    const cartItems = req.body.items; // Expecting format like { productId: quantity, ... }
-
-     if (!psid) {
+    if (!psid) {
         return res.status(400).send({ message: "Missing PSID." });
     }
-     if (!cartItems || typeof cartItems !== 'object') {
-         return res.status(400).send({ message: "Invalid cart items data." });
-     }
-
     try {
         const customer = await Customer.findOne({ where: { facebook_psid: psid } });
         if (!customer) {
             return res.status(404).send({ message: "Customer not found." });
         }
 
-        // Allow cart updates as long as there's group order context
+        const { name, email, street_address, city, state, zip } = req.body;
+        customer.name = name;
+        customer.email = email;
+        customer.street_address = street_address;
+        customer.city = city;
+        customer.state = state;
+        customer.zip = zip;
+        await customer.save();
+
+        // Since the order is already created, we just need to update the state
+        await updateCustomerState(customer, "AWAITING_PAYMENT_CONFIRMATION");
+
+        res.status(200).send({ message: "Address saved and state updated." });
+
+    } catch (error) {
+        console.error(`Error saving address for PSID ${psid}:`, error);
+        res.status(500).send({ message: error.message || "Error saving address." });
+    }
+};
+
+// Update the user's cart state from the webview
+exports.updateCart = async (req, res) => {
+    const psid = req.query.psid;
+    const cartItems = req.body.items;
+
+    if (!psid) {
+        return res.status(400).send({ message: "Missing PSID." });
+    }
+    if (!cartItems || typeof cartItems !== 'object') {
+        return res.status(400).send({ message: "Invalid cart items data." });
+    }
+
+    try {
+        const customer = await getCustomerAndState(psid);
         let currentData = customer.conversation_data || {};
         if (!currentData.groupOrderId) {
-             return res.status(403).send({ message: "Missing group order context." });
+            return res.status(403).send({ message: "Missing group order context." });
         }
 
-        console.log(`[updateCart] Received cartItems for PSID ${psid}:`, cartItems);
-        
-        // Replace the entire cart with the new one from the frontend
         const newCart = {};
         Object.entries(cartItems).forEach(([productId, quantity]) => {
             if (!isNaN(quantity) && quantity > 0) {
                 newCart[productId] = quantity;
             }
         });
-
         currentData.currentOrderItems = newCart;
-        // Update state, keeping the existing state name (e.g., ORDERING_SELECT_PRODUCT)
-        await updateCustomerState(customer, customer.conversation_state, currentData);
-        console.log(`[updateCart] Saved currentOrderItems for PSID ${psid}:`, currentData.currentOrderItems);
 
-        res.send({ message: "Cart updated successfully." });
+        if (Object.keys(newCart).length > 0) {
+            // Cart has items, create/update order and set state to AWAITING_ORDER_CONFIRMATION
+            const productIds = Object.keys(newCart);
+            const products = await Product.findAll({ where: { id: { [Op.in]: productIds } } });
+            const productMap = products.reduce((map, product) => {
+                map[product.id] = product;
+                return map;
+            }, {});
 
+            let subtotal = 0;
+            const detailedOrderItems = Object.entries(newCart).map(([productId, quantity]) => {
+                const product = productMap[productId];
+                if (!product) throw new Error(`Product with ID ${productId} not found.`);
+                subtotal += parseFloat(product.price) * quantity;
+                return { productId, quantity, price: product.price, name: product.name };
+            });
+
+            const existingPaidOrders = await Order.findAll({
+                where: {
+                    customer_id: currentData.customerId,
+                    group_order_id: currentData.groupOrderId,
+                    payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
+                }
+            });
+            const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+            const totalAmount = subtotal + shippingCost;
+
+            if (currentData.orderId) {
+                await Order.destroy({ where: { id: currentData.orderId } });
+            }
+
+            const order = await Order.create({
+                customer_id: currentData.customerId,
+                group_order_id: currentData.groupOrderId,
+                total_amount: totalAmount,
+                shipping_cost: shippingCost,
+                payment_status: "Invoice Sent"
+            });
+
+            const orderItemsToCreate = detailedOrderItems.map(item => ({
+                order_id: order.id,
+                product_id: item.productId,
+                quantity: item.quantity,
+                price_at_order_time: item.price
+            }));
+            await OrderItem.bulkCreate(orderItemsToCreate);
+
+            currentData.orderId = order.id;
+            await updateCustomerState(customer, "AWAITING_ORDER_CONFIRMATION", currentData);
+            res.send({ message: "Cart updated and state set to AWAITING_ORDER_CONFIRMATION." });
+
+        } else {
+            // Cart is empty, destroy order and set state to ORDERING_SELECT_PRODUCT
+            if (currentData.orderId) {
+                await Order.destroy({ where: { id: currentData.orderId } });
+                delete currentData.orderId;
+            }
+            await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
+            res.send({ message: "Cart is empty, state set to ORDERING_SELECT_PRODUCT." });
+        }
     } catch (error) {
-         console.error(`Error updating cart for PSID ${psid}:`, error);
+        console.error(`Error updating cart for PSID ${psid}:`, error);
         res.status(500).send({ message: "Error updating cart." });
+    }
+};
+
+exports.submitAddress = async (req, res) => {
+    const { psid } = req.body;
+    if (!psid) {
+        return res.status(400).send({ message: "Missing PSID." });
+    }
+    try {
+        const customer = await getCustomerAndState(psid);
+        await updateCustomerState(customer, "AWAITING_PAYMENT_CONFIRMATION");
+        res.status(200).send({ message: "State updated to AWAITING_PAYMENT_CONFIRMATION." });
+    } catch (error) {
+        console.error(`Error in submitAddress for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error updating state." });
+    }
+};
+
+exports.paymentSent = async (req, res) => {
+    const { psid } = req.body;
+    if (!psid) {
+        return res.status(400).send({ message: "Missing PSID." });
+    }
+    try {
+        const customer = await getCustomerAndState(psid);
+        const orderId = customer.conversation_data.orderId;
+        if (orderId) {
+            await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id } });
+        }
+        await clearCustomerState(customer);
+        res.status(200).send({ message: "Payment marked as claimed and state cleared." });
+    } catch (error) {
+        console.error(`Error in paymentSent for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error processing payment sent." });
     }
 };
