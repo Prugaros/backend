@@ -466,7 +466,7 @@ async function handleConfirmOrder(sender_psid, payload, customer) {
         // but we'll keep it for now and just confirm the order.
         // The webview should now handle the payment flow.
         await updateCustomerState(customer, 'AWAITING_PAYMENT_CONFIRMATION', currentData);
-        await callSendAPI(sender_psid, { text: "Your order has been confirmed. Please follow the payment instructions in the webview." });
+        await callSendAPI(sender_psid, { text: "Awesome! Please send payment via friends and family to one of these two options:\n\nVenmo (preferred): @naomiseijo\n(Last 4 digits: 5176 - Add this if needed)\n\nor\nPayPal: seijon386@yahoo.com" });
     } else {
         console.warn(`Order confirmation payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
         await callSendAPI(sender_psid, { text: "Sorry, there was an issue confirming your order." });
