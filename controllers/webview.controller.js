@@ -502,3 +502,44 @@ exports.paymentSent = async (req, res) => {
         res.status(500).send({ message: "Error processing payment sent." });
     }
 };
+
+exports.getActiveGroupOrders = async (req, res) => {
+    try {
+        const activeGroupOrders = await GroupOrder.findAll({
+            where: { status: 'Active' },
+            attributes: ['id', 'name']
+        });
+        res.send(activeGroupOrders);
+    } catch (error) {
+        console.error(`Error fetching active group orders:`, error);
+        res.status(500).send({ message: "Error fetching active group orders." });
+    }
+};
+
+exports.setGroupOrder = async (req, res) => {
+    const { psid, groupOrderId } = req.body;
+
+    if (!psid || !groupOrderId) {
+        return res.status(400).send({ message: "Missing PSID or Group Order ID." });
+    }
+
+    try {
+        const customer = await getCustomerAndState(psid);
+        if (!customer) {
+            return res.status(404).send({ message: "Customer not found." });
+        }
+
+        const currentData = {
+            customerId: customer.id,
+            groupOrderId: groupOrderId,
+            currentOrderItems: {}
+        };
+
+        await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
+
+        res.send({ message: "Group order context set and state initialized." });
+    } catch (error) {
+        console.error(`Error in setGroupOrder for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error setting group order." });
+    }
+};

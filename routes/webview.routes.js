@@ -5,6 +5,10 @@ const router = express.Router();
 // Route to get data for the order webview (identified by psid)
 router.get("/order-data", controller.getOrderData);
 
+// New routes for group order selection
+router.get("/active-group-orders", controller.getActiveGroupOrders);
+router.post("/set-group-order", controller.setGroupOrder);
+
 // Route to get only featured items
 router.get("/featured-data", controller.getFeaturedData);
 
