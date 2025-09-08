@@ -582,7 +582,7 @@ async function handlePaymentVerified(sender_psid, orderId, customer) {
         }
 
         const response = { text: "Great news! Your payment has been verified. Thanks for your order! If you have any questions, please message me here https://m.me/naomi.seijo.2025" };
-        await callSendAPI(sender_psid, response);
+        await callSendAPI(sender_psid, response, 'POST_PURCHASE_UPDATE');
     } catch (error) {
         console.error(`Error handling payment verified for order ${orderId}:`, error);
         await callSendAPI(sender_psid, { text: "Sorry, there was an error verifying your payment." });
