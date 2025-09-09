@@ -491,7 +491,6 @@ exports.paymentSent = async (req, res) => {
                 };
                 await callSendAPI(psid, message);
             }
-            await sendOrderSummaryMessage(psid, orderId);
         }
         await clearCustomerState(customer, t);
         await t.commit();

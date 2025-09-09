@@ -3,6 +3,7 @@ const { Order, OrderItem, Product, Customer, GroupOrder, PurchaseOrder, Purchase
 const { Op } = require("sequelize");
 const { stringify } = require('csv-stringify/sync'); // For CSV export
 const facebookWebhookController = require("./facebook.webhook.controller.js");
+const { callSendAPI } = require("../utils/facebookApi.js");
 const inventoryController = require("./inventory.controller.js");
 
 // Retrieve all Orders from the database (with filtering and includes)
@@ -502,37 +503,6 @@ exports.test = async (req, res) => {
     res.send("Order controller is working");
 };
 
-exports.triggerPaymentVerification = async (req, res) => {
-    const id = req.params.id;
-
-    try {
-        const order = await Order.findByPk(id, {
-            include: [
-                {
-                    model: Customer,
-                    as: 'customer',
-                    attributes: ['id', 'name', 'email', 'facebook_psid']
-                }
-            ]
-        });
-
-        if (!order) {
-            return res.status(404).send({ message: `Order with id=${id} not found.` });
-        }
-
-        if (!order.customer || !order.customer.facebook_psid) {
-            return res.status(400).send({ message: `Customer or Facebook PSID not found for order id=${id}.` });
-        }
-
-        console.error("Calling handlePaymentVerified with:", order.customer.facebook_psid, id, order.customer);
-        // Call the handlePaymentVerified function from the facebook webhook controller
-        await facebookWebhookController.handlePaymentVerified(order.customer.facebook_psid, id, order.customer);
-        res.send({ message: "Payment verification triggered successfully." });
-    } catch (err) {
-        res.status(500).send({ message: "Error triggering payment verification for order id=" + id + ": " + err.message });
-    }
-};
-
 // Export Orders as CSV for Pirate Ship
 exports.exportCsv = async (req, res) => {
     const { groupOrderId, packageCategory } = req.query;
@@ -637,5 +607,115 @@ exports.exportCsv = async (req, res) => {
         res.status(500).send({
             message: err.message || "Some error occurred while exporting orders."
         });
+    }
+};
+
+exports.markAsPaid = async (req, res) => {
+    const { customerId, groupOrderId } = req.body;
+
+    if (!customerId || !groupOrderId) {
+        return res.status(400).send({ message: "Customer ID and Group Order ID are required." });
+    }
+
+    const t = await db.sequelize.transaction();
+
+    try {
+        const orders = await Order.findAll({
+            where: {
+                customer_id: customerId,
+                group_order_id: groupOrderId,
+                payment_status: {
+                    [Op.in]: ['Payment Claimed', 'Invoice Sent']
+                }
+            },
+            transaction: t
+        });
+
+        if (orders.length === 0) {
+            await t.commit();
+            return res.status(404).send({ message: "No 'Payment Claimed' or 'Invoice Sent' orders found for this customer and group order." });
+        }
+
+        const orderIds = orders.map(order => order.id);
+
+        await Order.update(
+            { payment_status: 'Paid' },
+            { where: { id: { [Op.in]: orderIds } }, transaction: t }
+        );
+
+        const allPaidOrders = await Order.findAll({
+            where: {
+                customer_id: customerId,
+                group_order_id: groupOrderId,
+                payment_status: 'Paid'
+            },
+            include: [{
+                model: OrderItem,
+                as: 'orderItems',
+                include: [{
+                    model: Product,
+                    as: 'orderProduct'
+                }]
+            }],
+            transaction: t
+        });
+
+        const customer = await Customer.findByPk(customerId, { transaction: t });
+        if (!customer || !customer.facebook_psid) {
+            throw new Error("Customer PSID not found.");
+        }
+
+        // Consolidate all items from all paid orders
+        const consolidatedItems = {};
+        let totalShipping = 0;
+        let totalAppliedCredit = 0;
+
+        allPaidOrders.forEach(order => {
+            order.orderItems.forEach(item => {
+                if (consolidatedItems[item.product_id]) {
+                    consolidatedItems[item.product_id].quantity += item.quantity;
+                } else {
+                    consolidatedItems[item.product_id] = {
+                        name: item.orderProduct.name,
+                        quantity: item.quantity,
+                        price: item.price_at_order_time
+                    };
+                }
+            });
+            totalShipping += parseFloat(order.shipping_cost);
+            totalAppliedCredit += parseFloat(order.applied_credit);
+        });
+
+        const paymentVerifiedMessage = "Great news! Your payment has been verified. Thanks for your order! If you have any questions, please message Naomi directly https://m.me/naomi.seijo.2025";
+        await callSendAPI(customer.facebook_psid, { text: paymentVerifiedMessage }, 'POST_PURCHASE_UPDATE');
+
+        let summaryTitle = allPaidOrders.length > 1 ? "Here is your updated consolidated order summary:\n\n" : "Here is your order summary:\n\n";
+        let summaryText = summaryTitle;
+        let subtotal = 0;
+        Object.values(consolidatedItems).forEach(item => {
+            const lineTotal = item.quantity * item.price;
+            subtotal += lineTotal;
+            summaryText += `- ${item.name} (Qty: ${item.quantity}): $${lineTotal.toFixed(2)}\n`;
+        });
+
+        const grandTotal = subtotal + totalShipping - totalAppliedCredit;
+
+        summaryText += `\nSubtotal: $${subtotal.toFixed(2)}`;
+        summaryText += `\nShipping: $${totalShipping.toFixed(2)}`;
+        if (totalAppliedCredit > 0) {
+            summaryText += `\nCredit Applied: -$${totalAppliedCredit.toFixed(2)}`;
+        }
+        summaryText += `\nTotal: $${grandTotal.toFixed(2)}`;
+
+        await callSendAPI(customer.facebook_psid, { text: summaryText }, 'POST_PURCHASE_UPDATE');
+
+        await t.commit();
+
+        res.send({ message: "Orders marked as paid and consolidated summary sent." });
+
+    } catch (error) {
+        await t.rollback();
+        console.error("Error in markAsPaid:", error);
+        res.status(500).send({ message: "Error processing request: " + error.message });
     }
 };

@@ -33,6 +33,9 @@ router.put("/:id/payment-status", orders.updatePaymentStatus); // Added this rou
 // Trigger payment verification
 router.post("/:id/trigger-payment-verification", orders.triggerPaymentVerification);
 
+// Mark orders as paid and send consolidated summary
+router.post("/mark-as-paid", orders.markAsPaid);
+
 router.put("/shipment-manifest/:group_order_id", orders.updateShippingManifest);
 
 // Note: Order creation happens via the webhook/bot logic, not typically via direct API call by admin
