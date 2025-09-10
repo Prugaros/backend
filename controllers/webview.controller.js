@@ -295,7 +295,11 @@ exports.getAddress = async (req, res) => {
                 }
             });
 
-            const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+            let shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+            if (customer.country && customer.country !== 'United States') {
+                const totalQuantity = detailedOrderItems.reduce((sum, item) => sum + item.quantity, 0);
+                shippingCost = totalQuantity * 1.70;
+            }
             let totalAmount = subtotal + shippingCost;
             let appliedCredit = 0;
 
@@ -320,7 +324,9 @@ exports.getAddress = async (req, res) => {
                 street_address: customer.street_address || '',
                 city: customer.city || '',
                 state: customer.state || '',
-                zip: customer.zip || ''
+                zip: customer.zip || '',
+                country: customer.country || 'United States',
+                international_address_block: customer.international_address_block || ''
             },
             orderSummary: orderSummary
         });
@@ -342,13 +348,27 @@ exports.saveAddress = async (req, res) => {
             return res.status(404).send({ message: "Customer not found." });
         }
 
-        const { name, email, street_address, city, state, zip } = req.body;
+        const { name, email, street_address, city, state, zip, country, international_address_block } = req.body;
         customer.name = name;
         customer.email = email;
-        customer.street_address = street_address;
-        customer.city = city;
-        customer.state = state;
-        customer.zip = zip;
+        customer.country = country;
+
+        if (country === 'United States') {
+            customer.street_address = street_address;
+            customer.city = city;
+            customer.state = state;
+            customer.zip = zip;
+            customer.is_international = false;
+            customer.international_address_block = null;
+        } else {
+            customer.street_address = null;
+            customer.city = null;
+            customer.state = null;
+            customer.zip = null;
+            customer.is_international = true;
+            customer.international_address_block = international_address_block;
+        }
+
         await customer.save();
 
         // Since the order is already created, we just need to update the state

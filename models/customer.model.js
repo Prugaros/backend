@@ -59,6 +59,10 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true
     },
+    country: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
     // New fields for conversation state
     conversation_state: {
         type: DataTypes.STRING,
