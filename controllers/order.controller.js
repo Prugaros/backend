@@ -336,7 +336,7 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                             {
                                 model: db.Collection,
                                 as: 'collection',
-                                attributes: ['Name']
+                                attributes: ['Name', 'isDisneyStore']
                             }
                         ]
                     }]
@@ -355,9 +355,9 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                     requiredQuantities[productId].quantity += item.quantity;
                 } else {
                     const brandName = product.brand ? product.brand.name : 'Unknown Brand';
-                    const collectionName = product.collection ? product.collection.Name : null;
+                    const isDisneyStore = product.collection ? product.collection.isDisneyStore : false;
                     let groupName = brandName;
-                    if (brandName === 'Ohora' && collectionName === 'Disney Store') {
+                    if (brandName === 'Ohora' && isDisneyStore) {
                         groupName = 'Ohora - Disney Store';
                     }
                     requiredQuantities[productId] = {
@@ -365,7 +365,9 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                         quantity: item.quantity,
                         group: groupName,
                         MSRP: product.MSRP,
-                        product_url: product.product_url
+                        product_url: product.product_url,
+                        brandName: brandName,
+                        isDisneyStore: isDisneyStore
                     };
                 }
             }

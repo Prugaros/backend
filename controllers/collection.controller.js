@@ -17,6 +17,7 @@ exports.create = async (req, res) => {
     DisplayOrder: req.body.DisplayOrder,
     isActive: req.body.isActive !== undefined ? req.body.isActive : true, // Default to true if not provided
     is_featured: req.body.is_featured !== undefined ? req.body.is_featured : false, // Default to false
+    isDisneyStore: req.body.isDisneyStore !== undefined ? req.body.isDisneyStore : false, // Default to false
     brandId: req.body.brandId,
   };
 
