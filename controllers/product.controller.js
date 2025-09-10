@@ -18,6 +18,7 @@ exports.create = async (req, res) => {
     product_url: req.body.product_url,
     description: req.body.description,
     price: req.body.price,
+    MSRP: req.body.MSRP,
     images: req.body.images || [], // Use 'images' field
     weight_oz: req.body.weight_oz,
     is_active: req.body.is_active !== undefined ? req.body.is_active : true,
