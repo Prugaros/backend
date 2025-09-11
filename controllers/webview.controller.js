@@ -76,6 +76,7 @@ exports.getOrderSummary = async (req, res) => {
             return res.status(404).send({ message: "Customer not found." });
         }
 
+        let hasPaidOrders = false;
         const currentData = customer.conversation_data || {};
         const orderId = currentData.orderId;
 
@@ -294,8 +295,9 @@ exports.getAddress = async (req, res) => {
                     payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
                 }
             });
+            hasPaidOrders = existingPaidOrders.length > 0;
 
-            let shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+            let shippingCost = hasPaidOrders ? 0.00 : 5.00;
             if (customer.country && customer.country !== 'United States') {
                 const totalQuantity = detailedOrderItems.reduce((sum, item) => sum + item.quantity, 0);
                 shippingCost = totalQuantity * 1.70;
@@ -328,7 +330,8 @@ exports.getAddress = async (req, res) => {
                 country: customer.country || 'United States',
                 international_address_block: customer.international_address_block || ''
             },
-            orderSummary: orderSummary
+            orderSummary: orderSummary,
+            hasPaidOrders: hasPaidOrders
         });
     } catch (error) {
         console.error(`Error fetching address and order summary for PSID ${psid}:`, error);
@@ -370,6 +373,40 @@ exports.saveAddress = async (req, res) => {
         }
 
         await customer.save();
+
+        const currentData = customer.conversation_data || {};
+        const orderId = currentData.orderId;
+
+        if (orderId) {
+            const order = await Order.findByPk(orderId, {
+                include: [{ model: OrderItem, as: 'orderItems' }]
+            });
+
+            if (order) {
+                let shippingCost = order.shipping_cost;
+                if (customer.country !== 'United States') {
+                    const totalQuantity = order.orderItems.reduce((sum, item) => sum + item.quantity, 0);
+                    shippingCost = totalQuantity * 1.70;
+                } else {
+                    const existingPaidOrders = await Order.findAll({
+                        where: {
+                            customer_id: currentData.customerId,
+                            group_order_id: currentData.groupOrderId,
+                            payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
+                        }
+                    });
+                    shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+                }
+
+                const subtotal = order.orderItems.reduce((sum, item) => sum + (item.quantity * item.price_at_order_time), 0);
+                const totalAmount = subtotal + shippingCost;
+
+                await order.update({
+                    shipping_cost: shippingCost,
+                    total_amount: totalAmount
+                });
+            }
+        }
 
         // Since the order is already created, we just need to update the state
         await updateCustomerState(customer, "AWAITING_PAYMENT_CONFIRMATION");
