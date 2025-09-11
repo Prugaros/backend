@@ -373,6 +373,20 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
             }
         }
 
+        // Adjust for refunds
+        const orderIds = orders.map(order => order.id);
+        const refunds = await db.Refund.findAll({
+            where: {
+                order_id: { [Op.in]: orderIds }
+            }
+        });
+
+        for (const refund of refunds) {
+            if (requiredQuantities[refund.product_id]) {
+                requiredQuantities[refund.product_id].quantity -= refund.quantity;
+            }
+        }
+
         // Get all purchased items for the group order
         const purchaseOrders = await PurchaseOrder.findAll({
             where: { group_order_id: groupOrderId },
