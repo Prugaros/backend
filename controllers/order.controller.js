@@ -47,7 +47,43 @@ exports.findAll = async (req, res) => {
             order: [['order_date', 'DESC']] // Order by date, newest first
         });
 
-        res.send(data);
+        // Convert to plain objects to modify them
+        let orders = data.map(order => order.get({ plain: true }));
+
+        // Get all order IDs from the current page of orders
+        const orderIds = orders.map(order => order.id);
+
+        if (orderIds.length > 0) {
+            // Fetch all refunds associated with these orders
+            const refunds = await db.Refund.findAll({
+                where: {
+                    order_id: { [Op.in]: orderIds }
+                }
+            });
+
+            // Create a lookup map for refunded quantities: { 'orderId-productId': totalRefundedQuantity }
+            const refundMap = {};
+            refunds.forEach(refund => {
+                const key = `${refund.order_id}-${refund.product_id}`;
+                refundMap[key] = (refundMap[key] || 0) + refund.quantity;
+            });
+
+            // Adjust quantities for refunds and filter out fully refunded items
+            orders.forEach(order => {
+                order.orderItems.forEach(item => {
+                    const key = `${item.order_id}-${item.product_id}`;
+                    const refundedQuantity = refundMap[key] || 0;
+                    if (refundedQuantity > 0) {
+                        item.quantity -= refundedQuantity;
+                    }
+                });
+
+                // Filter out items with a quantity of 0 or less
+                order.orderItems = order.orderItems.filter(item => item.quantity > 0);
+            });
+        }
+
+        res.send(orders);
     } catch (err) {
         res.status(500).send({
             message: err.message || "Some error occurred while retrieving orders."
