@@ -247,7 +247,14 @@ exports.getShipmentIntakeList = async (req, res) => {
       try {
         const quantity = await db.OrderItem.sum('quantity', {
           where: { product_id: product.id },
-          include: [{ model: db.Order, as: 'order', where: { group_order_id: groupOrderId } }]
+          include: [{
+            model: db.Order,
+            as: 'order',
+            where: {
+              group_order_id: groupOrderId,
+              payment_status: 'Paid'
+            }
+          }]
         }) || 0;
 
         const shipmentIntakeItem = await db.ShipmentIntakeItem.sum('received_quantity', {
