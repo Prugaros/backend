@@ -8,15 +8,15 @@ const inventoryController = require("./inventory.controller.js");
 
 // Retrieve all Orders from the database (with filtering and includes)
 exports.findAll = async (req, res) => {
-    const { groupOrderId, paymentStatus, customerName } = req.query;
+    const { groupOrderId, payment_status, customerName } = req.query;
     let orderCondition = {};
     let customerCondition = {};
 
     if (groupOrderId) {
         orderCondition.group_order_id = groupOrderId;
     }
-    if (paymentStatus) {
-        orderCondition.payment_status = paymentStatus;
+    if (payment_status) {
+        orderCondition.payment_status = payment_status;
     }
     if (customerName) {
         // Add condition to filter by customer name (case-insensitive)
