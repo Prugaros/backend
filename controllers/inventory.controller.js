@@ -213,74 +213,66 @@ exports.getShipmentIntakeList = async (req, res) => {
       return res.status(404).send({ message: `Group order with id=${groupOrderId} not found.` });
     }
 
-    // Fetch all products associated with the group order, including Brand and Collection
-    const products = await Product.findAll({
-      include: [
-        {
-          model: GroupOrder,
-          as: 'groupOrders',
-          where: { id: groupOrderId },
-          through: { attributes: [] } // Exclude join table attributes
-        },
-        {
-          model: db.Brand,
-          as: 'brand',
-          attributes: ['name', 'DisplayOrder'], // Fetch brand name and DisplayOrder
-          required: false // Don't require a brand to exist
-        },
-        {
-          model: db.Collection,
-          as: 'collection',
-          attributes: ['name', 'DisplayOrder'], // Fetch collection name and DisplayOrder
-          required: false // Don't require a collection to exist
-        }
-      ],
-      order: [
-        [{ model: db.Brand, as: 'brand' }, 'DisplayOrder', 'ASC'], // Sort by brand DisplayOrder
-        [{ model: db.Collection, as: 'collection' }, 'DisplayOrder', 'ASC'], // Sort collections by DisplayOrder
-        ['collectionProductOrder', 'ASC'], // Sort products by collectionProductOrder
-        ['name', 'ASC'] // Fallback sort by product name
-      ]
+    // 1. Get all purchase orders for the group order
+    const purchaseOrders = await db.PurchaseOrder.findAll({
+        where: { group_order_id: groupOrderId },
+        include: [{
+            model: db.PurchaseOrderItem,
+            as: 'purchaseOrderItems',
+            include: [{
+                model: Product,
+                as: 'purchasedProduct',
+                include: [
+                    { model: db.Brand, as: 'brand', attributes: ['name', 'DisplayOrder'], required: false },
+                    { model: db.Collection, as: 'collection', attributes: ['name', 'DisplayOrder'], required: false }
+                ]
+            }]
+        }]
     });
 
-    const shipmentIntakeList = await Promise.all(products.map(async product => {
-      try {
-        const quantity = await db.OrderItem.sum('quantity', {
-          where: { product_id: product.id },
-          include: [{
-            model: db.Order,
-            as: 'order',
-            where: {
-              group_order_id: groupOrderId,
-              payment_status: 'Paid'
+    // 2. Aggregate purchased quantities by product
+    const purchasedQuantities = {};
+    purchaseOrders.forEach(po => {
+        po.purchaseOrderItems.forEach(item => {
+            const product = item.purchasedProduct;
+            if (!product) return;
+            const productId = product.id;
+
+            if (purchasedQuantities[productId]) {
+                purchasedQuantities[productId].quantity += item.quantity;
+            } else {
+                purchasedQuantities[productId] = {
+                    productId: productId,
+                    name: product.name,
+                    quantity: item.quantity,
+                    brand: product.brand,
+                    collection: product.collection,
+                    collectionProductOrder: product.collectionProductOrder
+                };
             }
-          }]
-        }) || 0;
+        });
+    });
 
-        const shipmentIntakeItem = await db.ShipmentIntakeItem.sum('received_quantity', {
-          where: {
-            group_order_id: groupOrderId,
-            product_id: product.id
-          }
-        }) || 0;
+    // 3. Get received quantities for all products in this group order
+    const receivedItems = await db.ShipmentIntakeItem.findAll({
+        where: { group_order_id: groupOrderId }
+    });
 
-        const remainingQuantity = Math.max(0, quantity - shipmentIntakeItem);
-        const difference = shipmentIntakeItem - quantity;
+    const receivedQuantities = {};
+    receivedItems.forEach(item => {
+        receivedQuantities[item.product_id] = item.received_quantity;
+    });
 
+    // 4. Calculate remaining quantities
+    const shipmentIntakeList = Object.values(purchasedQuantities).map(item => {
+        const received = receivedQuantities[item.productId] || 0;
         return {
-          productId: product.id,
-          name: product.name,
-          quantity: remainingQuantity,
-          receivedQuantity: shipmentIntakeItem,
-          difference: difference,
-          brand: product.brand, // Include brand data
-          collection: product.collection // Include collection data
+            ...item,
+            quantity: item.quantity - received, // This is remaining quantity
+            receivedQuantity: received,
+            difference: received - item.quantity
         };
-      } catch (err) {
-        console.error(`Error calculating quantity for product ${product.id}:`, err, 'Product data:', product.toJSON()); // Log product data
-        return { productId: product.id, name: product.name, quantity: 0, receivedQuantity: 0, difference: difference, brand: null, collection: null };
-      }
-    }));
+    }).filter(item => item.quantity > 0); // Only show items that are yet to be received
 
     res.send(shipmentIntakeList);
   } catch (err) {
