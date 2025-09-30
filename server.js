@@ -17,7 +17,7 @@ app.use(cors(corsOptions)); // Enable Cross-Origin Resource Sharing with options
 
 // Add a middleware to log all incoming requests
 app.use((req, res, next) => {
-  //console.log(`Received request: ${req.method} ${req.url}`);
+  console.log(`Received request: ${req.method} ${req.url}`);
   next();
 });
 
@@ -80,6 +80,9 @@ app.use('/api/collections', collectionRoutes);
 
 const brandRoutes = require('./routes/brand.routes');
 app.use('/api/brands', brandRoutes);
+
+const customerRoutes = require('./routes/customer.routes');
+customerRoutes(app);
 
 const inventoryRoutes = require('./routes/inventory.routes');
 app.use('/api/inventory', inventoryRoutes);

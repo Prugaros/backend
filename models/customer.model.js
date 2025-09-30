@@ -104,6 +104,35 @@ module.exports = (sequelize, DataTypes) => {
         type: DataTypes.DECIMAL(10, 2),
         allowNull: false,
         defaultValue: 0.00
+    },
+    wants_destash_notification: {
+        type: DataTypes.BOOLEAN,
+        allowNull: false,
+        defaultValue: false
+    },
+    destash_conversation_state: {
+        type: DataTypes.STRING,
+        allowNull: true,
+    },
+    destash_conversation_data: {
+        type: DataTypes.TEXT,
+        allowNull: true,
+        get() {
+            const rawValue = this.getDataValue('destash_conversation_data');
+            try {
+                return rawValue ? JSON.parse(rawValue) : {};
+            } catch (e) {
+                console.error("Error parsing destash_conversation_data:", e);
+                return {};
+            }
+        },
+        set(value) {
+            if (value === null || value === undefined || (typeof value === 'object' && Object.keys(value).length === 0)) {
+                 this.setDataValue('destash_conversation_data', null);
+            } else {
+                 this.setDataValue('destash_conversation_data', JSON.stringify(value));
+            }
+        }
     }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

@@ -101,6 +101,21 @@ async function clearCustomerState(customer, transaction = null) {
 }
 exports.clearCustomerState = clearCustomerState; // Exported
 
+// --- Helper functions for destash state ---
+async function updateDestashState(customer, newState, newData = null) {
+    customer.destash_conversation_state = newState;
+    if (newData !== null) {
+        customer.destash_conversation_data = newData;
+    }
+    await customer.save();
+}
+
+async function clearDestashState(customer) {
+    customer.destash_conversation_state = null;
+    customer.destash_conversation_data = {};
+    await customer.save();
+}
+
 
 async function startOrderFlow(sender_psid, customer) {
     let response;
@@ -149,6 +164,26 @@ async function startOrderFlow(sender_psid, customer) {
 }
 
 
+async function startDestashFlow(sender_psid, customer) {
+    let response;
+    if (customer.wants_destash_notification) {
+        response = { text: "It looks like you're already on the list for destash notifications!" };
+    } else if (customer.email) {
+        await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_CONFIRMATION");
+        response = {
+            text: `Can I use ${customer.email} to notify you about the destash?`,
+            quick_replies: [
+                { content_type: "text", title: "Yes", payload: "DESTASH_CONFIRM_EMAIL_YES" },
+                { content_type: "text", title: "No", payload: "DESTASH_CONFIRM_EMAIL_NO" }
+            ]
+        };
+    } else {
+        await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_INPUT");
+        response = { text: "To get notified about the destash, please provide your email address." };
+    }
+    await callSendAPI(sender_psid, response);
+}
+
 // --- Message Handler ---
 async function handleMessage(sender_psid, received_message) {
     if (received_message.is_echo) {
@@ -163,8 +198,68 @@ async function handleMessage(sender_psid, received_message) {
     let customer = await getCustomerAndState(sender_psid);
     let currentState = customer.conversation_state || 'INITIAL';
     let currentData = customer.conversation_data;
+    let destashState = customer.destash_conversation_state;
+    let destashData = customer.destash_conversation_data;
 
-    // Handle Text Quick Replies
+    // Global command check for "destash"
+    if (lowerCaseMessageText === "destash") {
+        await startDestashFlow(sender_psid, customer);
+        return;
+    }
+
+    // Handle destash conversation flow
+    if (destashState) {
+        if (quickReplyPayload) {
+            if (destashState === "AWAITING_DESTASH_EMAIL_CONFIRMATION") {
+                if (quickReplyPayload === "DESTASH_CONFIRM_EMAIL_YES") {
+                    customer.wants_destash_notification = true;
+                    await customer.save();
+                    await clearDestashState(customer);
+                    response = { text: "Awesome, thank you! I've added you to the list." };
+                    await callSendAPI(sender_psid, response);
+                    return;
+                } else if (quickReplyPayload === "DESTASH_CONFIRM_EMAIL_NO") {
+                    await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_INPUT");
+                    response = { text: "No problem. Please provide the email address you'd like to use." };
+                    await callSendAPI(sender_psid, response);
+                    return;
+                }
+            } else if (destashState === "AWAITING_DESTASH_NEW_EMAIL_CONFIRMATION") {
+                if (quickReplyPayload === "DESTASH_NEW_EMAIL_YES") {
+                    customer.email = destashData.newEmail;
+                    customer.wants_destash_notification = true;
+                    await customer.save();
+                    await clearDestashState(customer);
+                    response = { text: "Awesome, thank you! I've added you to the list." };
+                    await callSendAPI(sender_psid, response);
+                    return;
+                } else if (quickReplyPayload === "DESTASH_NEW_EMAIL_NO") {
+                    await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_INPUT");
+                    response = { text: "No problem. Please provide the email address you'd like to use." };
+                    await callSendAPI(sender_psid, response);
+                    return;
+                }
+            }
+        } else if (messageText && destashState === "AWAITING_DESTASH_EMAIL_INPUT") {
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (emailRegex.test(messageText)) {
+                await updateDestashState(customer, "AWAITING_DESTASH_NEW_EMAIL_CONFIRMATION", { newEmail: messageText });
+                response = {
+                    text: `Is ${messageText} correct?`,
+                    quick_replies: [
+                        { content_type: "text", title: "Yes", payload: "DESTASH_NEW_EMAIL_YES" },
+                        { content_type: "text", title: "No", payload: "DESTASH_NEW_EMAIL_NO" }
+                    ]
+                };
+            } else {
+                response = { text: "That doesn't look like a valid email. Please try again." };
+            }
+            await callSendAPI(sender_psid, response);
+            return;
+        }
+    }
+
+    // Handle Text Quick Replies for main conversation
     if (quickReplyPayload) {
         if (currentState === "ORDERING_CHECK_ADDRESS") {
             if (quickReplyPayload === "CONFIRM_ADDRESS_YES") {
@@ -270,7 +365,8 @@ async function handleMessage(sender_psid, received_message) {
         else if (lowerCaseMessageText === "order" && currentState === "INITIAL") {
             await startOrderFlow(sender_psid, customer);
             return;
-        } else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
+        }
+        else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
              const selectedGroupOrder = currentData.availableGroupOrders.find(go => (
                 go.name.toLowerCase() === lowerCaseMessageText || String(go.id) === messageText
             ));
