@@ -202,7 +202,7 @@ async function handleMessage(sender_psid, received_message) {
     let destashData = customer.destash_conversation_data;
 
     // Global command check for "destash"
-    if (lowerCaseMessageText === "destash") {
+    if (lowerCaseMessageText.includes("destash")) {
         await startDestashFlow(sender_psid, customer);
         return;
     }
@@ -300,7 +300,7 @@ async function handleMessage(sender_psid, received_message) {
 
     // Handle Regular Text Messages
     if (messageText) {
-        if (lowerCaseMessageText === "restart") {
+        if (lowerCaseMessageText.includes("restart")) {
             const t = await sequelize.transaction();
             try {
                 if (currentData.orderId) {
@@ -318,7 +318,7 @@ async function handleMessage(sender_psid, received_message) {
             return;
         }
 
-        if (lowerCaseMessageText === "help" || lowerCaseMessageText === "!help") {
+        if (lowerCaseMessageText.includes("help")) {
             let helpText = "Here are the available commands:\n\n";
             switch (currentState) {
                 case "ORDERING_AWAITING_ADDRESS":
@@ -363,7 +363,7 @@ async function handleMessage(sender_psid, received_message) {
             return;
         }
         // Start Order
-        else if (lowerCaseMessageText === "order" && currentState === "INITIAL") {
+        else if (lowerCaseMessageText.includes("order") && currentState === "INITIAL") {
             await startOrderFlow(sender_psid, customer);
             return;
         }
@@ -412,13 +412,13 @@ async function handleMessage(sender_psid, received_message) {
             }
         }
         else if (currentState === "ORDERING_CHECK_ADDRESS"){
-            if (lowerCaseMessageText === "yes") {
+            if (lowerCaseMessageText.includes("yes")) {
                 await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
                 response = { text: "Great! Please use the button below to select your items." };
                 await callSendAPI(sender_psid, response);
                 await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
                 return;
-            } else if (lowerCaseMessageText === "no") {
+            } else if (lowerCaseMessageText.includes("no")) {
                 await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS");
                 response = { text: "Okay, please provide your updated details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
                 await callSendAPI(sender_psid, response);
@@ -428,7 +428,7 @@ async function handleMessage(sender_psid, received_message) {
 
 
 
-        else if (lowerCaseMessageText === "cart") {
+        else if (lowerCaseMessageText.includes("cart")) {
             await displayCart(sender_psid, currentData);
             return;
         }
@@ -436,13 +436,13 @@ async function handleMessage(sender_psid, received_message) {
 
         // Default / Fallback
         else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
-            if (lowerCaseMessageText === "confirm") {
+            if (lowerCaseMessageText.includes("confirm")) {
                 await handleConfirmOrder(sender_psid, `CONFIRM_ORDER:${currentData.orderId}`, customer);
                 return;
-            } else if (lowerCaseMessageText === "edit") {
+            } else if (lowerCaseMessageText.includes("edit")) {
                 await handleEditOrder(sender_psid, `EDIT_ORDER:${currentData.orderId}`, customer);
                 return;
-            } else if (lowerCaseMessageText === "cancel") {
+            } else if (lowerCaseMessageText.includes("cancel")) {
                 await handleCancelOrder(sender_psid, `CANCEL_ORDER:${currentData.orderId}`, customer);
                 return;
             } else {
@@ -451,10 +451,10 @@ async function handleMessage(sender_psid, received_message) {
         }
 
         else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
-            if (lowerCaseMessageText === "edit") {
+            if (lowerCaseMessageText.includes("edit")) {
                 await handleEditOrder(sender_psid, `EDIT_ORDER:${currentData.orderId}`, customer);
                 return;
-            } else if (lowerCaseMessageText === "paid") {
+            } else if (lowerCaseMessageText.includes("paid")) {
                 await handleMarkPaidClaimed(sender_psid, `MARK_PAID_CLAIMED:${currentData.orderId}`, customer);
                 return;
             } else {
