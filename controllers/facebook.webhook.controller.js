@@ -357,6 +357,7 @@ async function handleMessage(sender_psid, received_message) {
                     helpText += "- order: Start a new order\n";
                     break;
             }
+            helpText += "\n- destash: Sign up for destash notifications";
             response = { text: helpText };
             callSendAPI(sender_psid, response);
             return;
