@@ -361,7 +361,7 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                     include: [{
                         model: Product,
                         as: 'orderProduct',
-                        attributes: ['id', 'name', 'brandId', 'collectionId', 'MSRP', 'product_url'],
+                        attributes: ['id', 'name', 'brandId', 'collectionId', 'MSRP', 'product_url', 'is_active'],
                         paranoid: false, // Include soft-deleted products
                         include: [
                             {
@@ -403,7 +403,8 @@ exports.getPurchaseListForGroupOrder = async (req, res) => {
                         MSRP: product.MSRP,
                         product_url: product.product_url,
                         brandName: brandName,
-                        isDisneyStore: isDisneyStore
+                        isDisneyStore: isDisneyStore,
+                        is_active: product.is_active
                     };
                 }
             }
