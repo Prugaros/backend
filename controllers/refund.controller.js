@@ -2,6 +2,8 @@ const db = require('../models');
 const Refund = db.Refund;
 const Order = db.Order;
 const Product = db.Product;
+const Customer = db.Customer;
+const { callSendAPI } = require('../utils/facebookApi');
 
 // Create a new refund
 exports.createRefund = async (req, res) => {
@@ -85,13 +87,39 @@ exports.updateRefundState = async (req, res) => {
     const { id } = req.params;
     const { state } = req.body;
 
-    const refund = await Refund.findByPk(id);
+    const refund = await Refund.findByPk(id, {
+      include: [
+        {
+          model: Order,
+          as: 'order',
+          include: [
+            {
+              model: Customer,
+              as: 'customer'
+            }
+          ]
+        },
+        {
+          model: Product,
+          as: 'product'
+        }
+      ]
+    });
 
     if (!refund) {
       return res.status(404).send({ message: 'Refund not found.' });
     }
 
     await refund.update({ state });
+
+    if (state === 'refunded' && refund.order.customer.facebook_psid) {
+      const refundAmount = refund.quantity * refund.price;
+      const messageText = `A cash refund has been processed for your order.\n\nProduct: ${refund.product.name}\nQuantity: ${refund.quantity}\nAmount: $${refundAmount.toFixed(2)}`;
+      const message = {
+        text: messageText
+      };
+      await callSendAPI(refund.order.customer.facebook_psid, message, 'POST_PURCHASE_UPDATE');
+    }
 
     res.status(200).send(refund);
   } catch (error) {

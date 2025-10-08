@@ -34,8 +34,14 @@ exports.addStoreCredit = async (req, res) => {
     await customer.update({ credit: newBalance });
 
     if (customer.facebook_psid) {
+      let messageText;
+      if (amount > 0) {
+        messageText = `You have received a store credit!\n\nAmount: $${amount.toFixed(2)}\nReason: ${reason}\n\nYour new balance is $${newBalance.toFixed(2)}.`;
+      } else {
+        messageText = `Your store credit has been adjusted.\n\nAmount: $${amount.toFixed(2)}\nReason: ${reason}\n\nYour new balance is $${newBalance.toFixed(2)}.`;
+      }
       const message = {
-        text: `You have received a store credit!\n\nAmount: $${amount.toFixed(2)}\nReason: ${reason}\n\nYour new balance is $${newBalance.toFixed(2)}.`
+        text: messageText
       };
       await callSendAPI(customer.facebook_psid, message, 'POST_PURCHASE_UPDATE');
     }
