@@ -117,6 +117,47 @@ async function clearDestashState(customer) {
 }
 
 
+async function proceedToOrderSelection(sender_psid, customer, groupOrderId) {
+    let currentData = customer.conversation_data || {};
+    currentData.groupOrderId = groupOrderId;
+    currentData.customerId = customer.id;
+
+    // Check for an existing, unpaid order
+    const existingOrder = await Order.findOne({
+        where: {
+            customer_id: customer.id,
+            group_order_id: groupOrderId,
+            payment_status: { [Op.notIn]: ['Paid', 'Cancelled', 'Payment Claimed'] }
+        },
+        include: [{ model: OrderItem, as: 'orderItems' }]
+    });
+
+    let responseText;
+    if (existingOrder) {
+        // If an order exists, load its items into the conversation data
+        currentData.orderId = existingOrder.id;
+        const existingItems = {};
+        if (existingOrder.orderItems) {
+            existingOrder.orderItems.forEach(item => {
+                existingItems[item.product_id] = {
+                    quantity: item.quantity,
+                    price: item.price_at_order_time
+                };
+            });
+        }
+        currentData.currentOrderItems = existingItems;
+        responseText = "You have a pending order. Use the button below to view or edit it. If you get stuck, type `!help`";
+    } else {
+        // If no order exists, start with an empty cart
+        currentData.currentOrderItems = {};
+        responseText = "Use the button below to start your order. If you get stuck, type `!help`";
+    }
+
+    await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
+    await callSendAPI(sender_psid, { text: responseText });
+    await sendProductSelectionWebviewButton(sender_psid, groupOrderId);
+}
+
 async function startOrderFlow(sender_psid, customer) {
     let response;
     let currentData = customer.conversation_data || {};
@@ -150,11 +191,8 @@ async function startOrderFlow(sender_psid, customer) {
             await updateCustomerState(customer, "AWAITING_GROUP_ORDER_SELECTION", currentData);
             await callSendAPI(sender_psid, response);
         } else {
-            currentData = { customerId: customer.id, groupOrderId: activeGroupOrders[0].id, currentOrderItems: {} };
-            await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
-            response = { text: "Use the button below to start your order. If you get stuck, type `!help`" };
-            await callSendAPI(sender_psid, response);
-            await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+            // If only one active group order, proceed directly
+            await proceedToOrderSelection(sender_psid, customer, activeGroupOrders[0].id);
         }
     } catch (error) {
         console.error("Error starting order process:", error);
@@ -190,9 +228,22 @@ async function handleMessage(sender_psid, received_message) {
         return;
     }
 
+    // Handle non-text messages first to avoid errors
+    if (!received_message.text) {
+        if (received_message.attachments) {
+            const response = { text: "Thanks for the attachment, this will be manually reviewed! If you want to order, please type 'order'." };
+            callSendAPI(sender_psid, response);
+        } else {
+            console.warn(`Handling unknown message type from ${sender_psid}`, received_message);
+            const response = { "text": "Sorry, I didn't understand that. If you get stuck, type `!help`" };
+            callSendAPI(sender_psid, response);
+        }
+        return; // Stop further processing
+    }
+
     let response;
-    const messageText = received_message.text?.trim();
-    const lowerCaseMessageText = messageText?.toLowerCase();
+    const messageText = received_message.text.trim();
+    const lowerCaseMessageText = messageText.toLowerCase();
     const quickReplyPayload = received_message.quick_reply?.payload;
 
     let customer = await getCustomerAndState(sender_psid);
@@ -368,21 +419,17 @@ async function handleMessage(sender_psid, received_message) {
             return;
         }
         else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
-             const selectedGroupOrder = currentData.availableGroupOrders.find(go => (
+            const selectedGroupOrder = currentData.availableGroupOrders.find(go =>
                 go.name.toLowerCase() === lowerCaseMessageText || String(go.id) === messageText
-            ));
+            );
 
             if (selectedGroupOrder) {
-                currentData.groupOrderId = selectedGroupOrder.id;
-                await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
-                response = { text: "Use the button below to start your order. If you get stuck, type `!help`" };
-                await callSendAPI(sender_psid, response);
-                await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+                await proceedToOrderSelection(sender_psid, customer, selectedGroupOrder.id);
                 return;
             } else {
                 response = { text: "Sorry, I couldn't find a group order matching that name or ID. Please try again, or type 'help' for available commands." };
-                 callSendAPI(sender_psid, response);
-                 return;
+                callSendAPI(sender_psid, response);
+                return;
             }
         }
         // Handle Address/Info Input
@@ -461,15 +508,6 @@ async function handleMessage(sender_psid, received_message) {
                 response = { text: "Please confirm your payment by typing 'paid', edit your order by typing 'edit', or check your cart by typing 'cart'." };
             }
     }
-    // Handle Non-Text Messages
-    else if (received_message.attachments) {
-        response = { text: "Thanks for the attachment! If you want to order, please type 'order'." };
-    }
-    // Fallback
-    else {
-         console.warn(`Handling unknown message type from ${sender_psid}`);
-         response = { "text": "Sorry, I didn't understand that. If you get stuck, type `!help`" }
-     }
 
      // Send the response message if one was generated
      if (response) {
