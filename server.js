@@ -49,9 +49,9 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, 'public')));
 console.log('Serving static files from:', path.join(__dirname, 'public')); // Add this log
 
-// Replace the app.get('/') route with this at the bottom, AFTER all API routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Simple route for testing
+app.get('/', (req, res) => {
+  res.json({ message: 'Welcome to the Facebook SCG Bot Backend!' });
 });
 
 // --- API Routes ---
