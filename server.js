@@ -45,14 +45,22 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files from the 'public' directory using an absolute path
+// Serve static files from the 'public' directory (used in production)
 app.use(express.static(path.join(__dirname, 'public')));
-console.log('Serving static files from:', path.join(__dirname, 'public')); // Add this log
 
-// Simple route for testing
-app.get('/', (req, res) => {
-  res.json({ message: 'Welcome to the Facebook SCG Bot Backend!' });
-});
+if (process.env.NODE_ENV === 'production') {
+  // Production: serve the built React app for all unmatched routes
+  console.log('Running in PRODUCTION mode - serving static frontend from /public');
+  app.get(/(.*)/, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
+} else {
+  // Development: return a simple health check (frontend is served by Vite on port 5173)
+  console.log('Running in DEVELOPMENT mode - frontend served by Vite dev server');
+  app.get('/', (req, res) => {
+    res.json({ message: 'Welcome to the Facebook SCG Bot Backend! (Dev Mode)' });
+  });
+}
 
 // --- API Routes ---
 const authRoutes = require('./routes/auth.routes');
