@@ -15,6 +15,9 @@ router.get("/featured-data", controller.getFeaturedData);
 // Route to get data for a specific brand
 router.get("/brand-data/:brandId", controller.getBrandData);
 
+// Route to get all active products across all brands (global search)
+router.get("/all-products", controller.getAllProducts);
+
 // Route for the webview to submit updated cart data
 router.post("/update-cart", controller.updateCart);
 

@@ -94,6 +94,10 @@ refundRoutes(app);
 app.use('/api/facebook/webhook', facebookWebhookRoutes);
 
 
+// Serve static files (uploaded images) from the 'public' directory
+// This makes /uploads/images/<filename> resolve to backend/public/uploads/images/<filename>
+app.use(express.static(path.join(__dirname, 'public')));
+
 // TODO: Add other API routes here (e.g., customers)
 
 // Database Synchronization & Server Start

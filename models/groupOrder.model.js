@@ -9,13 +9,6 @@ module.exports = (sequelize, DataTypes) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // GroupOrder belongs to many Products through GroupOrderItems
-      GroupOrder.belongsToMany(models.Product, {
-        through: 'GroupOrderItem', // Name of the join table model
-        foreignKey: 'group_order_id',
-        otherKey: 'product_id',
-        as: 'products' // Alias for the association
-      });
       // GroupOrder has many Orders
       GroupOrder.hasMany(models.Order, {
         foreignKey: 'group_order_id',

@@ -63,76 +63,97 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.STRING,
       allowNull: true
     },
+    // New persistent cart that survives conversation resets
+    persistent_cart: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      get() {
+        const rawValue = this.getDataValue('persistent_cart');
+        try {
+          return rawValue ? JSON.parse(rawValue) : {};
+        } catch (e) {
+          console.error("Error parsing persistent_cart:", e);
+          return {};
+        }
+      },
+      set(value) {
+        if (value === null || value === undefined || (typeof value === 'object' && Object.keys(value).length === 0)) {
+          this.setDataValue('persistent_cart', null);
+        } else {
+          this.setDataValue('persistent_cart', JSON.stringify(value));
+        }
+      }
+    },
     // New fields for conversation state
     conversation_state: {
-        type: DataTypes.STRING,
-        allowNull: true, // Can be null if no active conversation
-        defaultValue: 'INITIAL'
+      type: DataTypes.STRING,
+      allowNull: true, // Can be null if no active conversation
+      defaultValue: 'INITIAL'
     },
     conversation_data: {
-        type: DataTypes.TEXT, // Use TEXT for potentially larger JSON strings
-        allowNull: true,
-        get() {
-            const rawValue = this.getDataValue('conversation_data');
-            // Ensure we always return an object, even if DB value is null/empty
-            try {
-                return rawValue ? JSON.parse(rawValue) : {};
-            } catch (e) {
-                console.error("Error parsing conversation_data:", e);
-                return {}; // Return empty object on parse error
-            }
-        },
-        set(value) {
-            // Ensure we store null if value is null/undefined/empty object
-            if (value === null || value === undefined || (typeof value === 'object' && Object.keys(value).length === 0)) {
-                 this.setDataValue('conversation_data', null);
-            } else {
-                 this.setDataValue('conversation_data', JSON.stringify(value));
-            }
+      type: DataTypes.TEXT, // Use TEXT for potentially larger JSON strings
+      allowNull: true,
+      get() {
+        const rawValue = this.getDataValue('conversation_data');
+        // Ensure we always return an object, even if DB value is null/empty
+        try {
+          return rawValue ? JSON.parse(rawValue) : {};
+        } catch (e) {
+          console.error("Error parsing conversation_data:", e);
+          return {}; // Return empty object on parse error
         }
+      },
+      set(value) {
+        // Ensure we store null if value is null/undefined/empty object
+        if (value === null || value === undefined || (typeof value === 'object' && Object.keys(value).length === 0)) {
+          this.setDataValue('conversation_data', null);
+        } else {
+          this.setDataValue('conversation_data', JSON.stringify(value));
+        }
+      }
     },
     is_international: { // Added for international addresses
-        type: DataTypes.BOOLEAN,
-        allowNull: false,
-        defaultValue: false
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     },
     international_address_block: { // Added for international addresses
-        type: DataTypes.TEXT,
-        allowNull: true
+      type: DataTypes.TEXT,
+      allowNull: true
     },
     credit: {
-        type: DataTypes.DECIMAL(10, 2),
-        allowNull: false,
-        defaultValue: 0.00
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: false,
+      defaultValue: 0.00
     },
     wants_destash_notification: {
-        type: DataTypes.BOOLEAN,
-        allowNull: false,
-        defaultValue: false
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     },
     destash_conversation_state: {
-        type: DataTypes.STRING,
-        allowNull: true,
+      type: DataTypes.STRING,
+      allowNull: true,
     },
     destash_conversation_data: {
-        type: DataTypes.TEXT,
-        allowNull: true,
-        get() {
-            const rawValue = this.getDataValue('destash_conversation_data');
-            try {
-                return rawValue ? JSON.parse(rawValue) : {};
-            } catch (e) {
-                console.error("Error parsing destash_conversation_data:", e);
-                return {};
-            }
-        },
-        set(value) {
-            if (value === null || value === undefined || (typeof value === 'object' && Object.keys(value).length === 0)) {
-                 this.setDataValue('destash_conversation_data', null);
-            } else {
-                 this.setDataValue('destash_conversation_data', JSON.stringify(value));
-            }
+      type: DataTypes.TEXT,
+      allowNull: true,
+      get() {
+        const rawValue = this.getDataValue('destash_conversation_data');
+        try {
+          return rawValue ? JSON.parse(rawValue) : {};
+        } catch (e) {
+          console.error("Error parsing destash_conversation_data:", e);
+          return {};
         }
+      },
+      set(value) {
+        if (value === null || value === undefined || (typeof value === 'object' && Object.keys(value).length === 0)) {
+          this.setDataValue('destash_conversation_data', null);
+        } else {
+          this.setDataValue('destash_conversation_data', JSON.stringify(value));
+        }
+      }
     }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

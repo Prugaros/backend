@@ -9,7 +9,7 @@ const GroupOrder = db.GroupOrder;
 const Product = db.Product;
 const sequelize = db.sequelize;
 const { refundCreditForCancelledOrder } = require("./storeCredit.controller");
-const { callSendAPI } = require("../utils/facebookApi");
+const { callSendAPI, setUserPersistentMenu } = require("../utils/facebookApi");
 const { Op } = require("sequelize");
 
 // Access token and verify token from .env file
@@ -21,65 +21,95 @@ exports.verifyWebhook = (req, res) => {
     let token = req.query['hub.verify_token'];
     let challenge = req.query['hub.challenge'];
 
+    console.log(`[WEBHOOK] Verification attempt — mode: ${mode}, token: ${token ? token.substring(0, 8) + '...' : 'MISSING'}`);
+
     if (mode && token) {
         if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+            console.log('[WEBHOOK] ✅ Webhook verified successfully!');
             res.status(200).send(challenge);
         } else {
-            console.error('Webhook verification failed: Invalid token.');
+            console.error('[WEBHOOK] ❌ Verification failed: Token mismatch. Received:', token);
             res.sendStatus(403);
         }
     } else {
-         console.error('Webhook verification failed: Missing mode or token.');
-         res.sendStatus(400);
+        console.error('[WEBHOOK] ❌ Verification failed: Missing mode or token.');
+        res.sendStatus(400);
     }
 };
 
 // --- Event Handling Entry Point ---
-exports.handleEvent = (req, res) => {
+exports.handleEvent = async (req, res) => {
     let body = req.body;
+    console.log('[WEBHOOK] 📨 Incoming webhook event:', JSON.stringify(body, null, 2));
+
     if (body.object === 'page') {
-        body.entry.forEach(function(entry) {
-            let webhook_event = entry.messaging[0];
+        // Process each entry in the body
+        for (const entry of body.entry) {
+            // entry.messaging is an array of messaging events
+            for (const webhook_event of entry.messaging) {
+                try {
+                    let sender_psid = webhook_event.sender ? webhook_event.sender.id : null;
+                    if (!sender_psid) {
+                        console.error('[WEBHOOK] ❌ Missing sender PSID in webhook event:', JSON.stringify(webhook_event));
+                        continue;
+                    }
 
-            let sender_psid = webhook_event.sender.id;
-            if (!sender_psid) {
-                console.error("Missing sender PSID in webhook event.");
-                return;
-            }
+                    console.log(`[WEBHOOK] 🎯 Processing event for PSID ${sender_psid}...`);
 
-            if (webhook_event.referral) {
-                handleReferral(sender_psid, webhook_event.referral);
-            } else if (webhook_event.message) {
-                handleMessage(sender_psid, webhook_event.message);
-            } else if (webhook_event.postback) {
-                handlePostback(sender_psid, webhook_event.postback);
-            } else if (webhook_event.read) {
-                 // console.log('Event Type: Read Receipt');
-            } else {
-                console.warn("Received unhandled webhook event type:", webhook_event);
+                    if (webhook_event.referral) {
+                        console.log(`[WEBHOOK] → Referral event from PSID: ${sender_psid} | Ref: ${webhook_event.referral.ref}`);
+                        let { customer, created } = await getCustomerAndState(sender_psid);
+                        if (created) {
+                            await setUserPersistentMenu(sender_psid);
+                            await startOrderFlow(sender_psid, customer);
+                        }
+                    } else if (webhook_event.message) {
+                        const msgText = webhook_event.message.text || '[non-text message]';
+                        console.log(`[WEBHOOK] → Message event from PSID: ${sender_psid} | Text: "${msgText}"`);
+                        await handleMessage(sender_psid, webhook_event.message);
+                    } else if (webhook_event.postback) {
+                        console.log(`[WEBHOOK] → Postback event from PSID: ${sender_psid} | Payload: "${webhook_event.postback.payload}"`);
+                        await handlePostback(sender_psid, webhook_event.postback);
+                    } else if (webhook_event.read) {
+                        console.log(`[WEBHOOK] → Read receipt from PSID: ${sender_psid}`);
+                    } else {
+                        console.warn('[WEBHOOK] ⚠️ Unhandled webhook event type:', JSON.stringify(webhook_event));
+                    }
+                } catch (error) {
+                    console.error(`[WEBHOOK] ❌ Error processing event from PSID ${webhook_event.sender?.id}:`, error);
+                }
             }
-        });
+        }
         res.status(200).send('EVENT_RECEIVED');
     } else {
-        console.warn("Received webhook event for object other than 'page':", body.object);
+        console.warn(`[WEBHOOK] ⚠️ Received event for unexpected object type: '${body.object}'`);
         res.sendStatus(404);
     }
 };
 
 // --- Helper function to get or create customer and their state ---
 async function getCustomerAndState(sender_psid) {
-    let [customer, created] = await Customer.findOrCreate({
-        where: { facebook_psid: sender_psid },
-        defaults: {
-            facebook_psid: sender_psid,
-            conversation_state: 'INITIAL',
-            conversation_data: {}
+    console.log(`[CUSTOMER] Attempting findOrCreate for PSID: ${sender_psid}`);
+    try {
+        let [customer, created] = await Customer.findOrCreate({
+            where: { facebook_psid: sender_psid },
+            defaults: {
+                facebook_psid: sender_psid,
+                conversation_state: 'INITIAL',
+                conversation_data: {}
+            }
+        });
+
+        console.log(`[CUSTOMER] Result for PSID ${sender_psid}: Created=${created}, ID=${customer?.id}`);
+
+        if (!customer.conversation_data) {
+            customer.conversation_data = {};
         }
-    });
-    if (!customer.conversation_data) {
-        customer.conversation_data = {};
+        return { customer, created };
+    } catch (error) {
+        console.error(`[CUSTOMER] ❌ Error in getCustomerAndState for PSID ${sender_psid}:`, error);
+        throw error;
     }
-    return customer;
 }
 exports.getCustomerAndState = getCustomerAndState; // Exported
 
@@ -128,29 +158,45 @@ async function proceedToOrderSelection(sender_psid, customer, groupOrderId) {
             customer_id: customer.id,
             group_order_id: groupOrderId,
             payment_status: { [Op.notIn]: ['Paid', 'Cancelled', 'Payment Claimed'] }
-        },
-        include: [{ model: OrderItem, as: 'orderItems' }]
+        }
     });
 
     let responseText;
     if (existingOrder) {
-        // If an order exists, load its items into the conversation data
         currentData.orderId = existingOrder.id;
-        const existingItems = {};
-        if (existingOrder.orderItems) {
-            existingOrder.orderItems.forEach(item => {
-                existingItems[item.product_id] = {
-                    quantity: item.quantity,
-                    price: item.price_at_order_time
-                };
-            });
-        }
-        currentData.currentOrderItems = existingItems;
-        responseText = "You have a pending order. Use the button below to view or edit it. If you get stuck, type `!help`";
+        responseText = "You have a pending order. Use the button below to view or edit it, or use the menu in the bottom right for more options.";
     } else {
-        // If no order exists, start with an empty cart
-        currentData.currentOrderItems = {};
-        responseText = "Use the button below to start your order. If you get stuck, type `!help`";
+        responseText = "Use the button below to start your order. You can also find your cart and other options in the menu in the bottom right!";
+    }
+
+    // Load cart from persistent storage and validate
+    let cartItems = customer.persistent_cart || {};
+    const productIds = Object.keys(cartItems);
+
+    if (productIds.length > 0) {
+        // Prune stale items
+        const activeProducts = await Product.findAll({
+            where: { id: { [Op.in]: productIds }, is_active: true, '$brand.isActive$': true },
+            include: [{ model: db.Brand, as: 'brand', attributes: ['isActive'] }]
+        });
+
+        const activeProductIds = new Set(activeProducts.map(p => p.id.toString()));
+        let pruned = false;
+        const newCart = {};
+
+        for (const pid of productIds) {
+            if (activeProductIds.has(pid.toString())) {
+                newCart[pid] = cartItems[pid];
+            } else {
+                pruned = true;
+            }
+        }
+
+        if (pruned) {
+            customer.persistent_cart = newCart;
+            await customer.save();
+            await callSendAPI(sender_psid, { text: "Note: Some items were removed from your cart because they are no longer available." });
+        }
     }
 
     await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT", currentData);
@@ -169,7 +215,6 @@ async function startOrderFlow(sender_psid, customer) {
         } else if (activeGroupOrders.length > 1) {
             currentData = {
                 customerId: customer.id,
-                currentOrderItems: customer.conversation_data?.currentOrderItems || {},
                 availableGroupOrders: activeGroupOrders.map(go => ({ id: go.id, name: go.name }))
             };
 
@@ -225,30 +270,42 @@ async function startDestashFlow(sender_psid, customer) {
 // --- Message Handler ---
 async function handleMessage(sender_psid, received_message) {
     if (received_message.is_echo) {
+        console.log(`[WEBHOOK] ↩️ Echo message from PSID ${sender_psid}, ignoring.`);
         return;
     }
 
-    // Handle non-text messages first to avoid errors
+    // Ensure customer exists in DB first (this triggers the welcome/menu for new users)
+    let { customer, created } = await getCustomerAndState(sender_psid);
+    let currentState = customer.conversation_state || 'INITIAL';
+    let currentData = customer.conversation_data;
+
+    // Greeting for brand new users who skip GET_STARTED
+    if (created) {
+        await setUserPersistentMenu(sender_psid);
+        await startOrderFlow(sender_psid, customer);
+        // We continue processing the actual message they sent too
+    }
+
+    let response;
+    const messageText = received_message.text ? received_message.text.trim() : '';
+    const lowerCaseMessageText = messageText.toLowerCase();
+    const quickReplyPayload = received_message.quick_reply?.payload;
+
+    console.log(`[WEBHOOK] 💬 Processing message from PSID ${sender_psid} | State: "${currentState}" | Text: "${messageText}"${quickReplyPayload ? ` | Quick Reply: "${quickReplyPayload}"` : ''}`);
+
+    // Handle non-text messages
     if (!received_message.text) {
         if (received_message.attachments) {
-            const response = { text: "Thanks for the attachment, this will be manually reviewed! If you want to order, please type 'order'." };
+            console.log(`[WEBHOOK] 📎 Attachment received from PSID ${sender_psid}`);
+            const response = { text: "Thanks for the attachment, I'll review this manually! If you want to order, please use the \"Visit Shop\" button in the menu in the bottom right." };
             callSendAPI(sender_psid, response);
         } else {
-            console.warn(`Handling unknown message type from ${sender_psid}`, received_message);
-            const response = { "text": "Sorry, I didn't understand that. If you get stuck, type `!help`" };
+            console.log(`[WEBHOOK] ⚠️ Unknown message type from PSID ${sender_psid}:`, JSON.stringify(received_message));
+            const response = { "text": "Sorry, I didn't understand that. You can find all options in the menu in the bottom right!" };
             callSendAPI(sender_psid, response);
         }
         return; // Stop further processing
     }
-
-    let response;
-    const messageText = received_message.text.trim();
-    const lowerCaseMessageText = messageText.toLowerCase();
-    const quickReplyPayload = received_message.quick_reply?.payload;
-
-    let customer = await getCustomerAndState(sender_psid);
-    let currentState = customer.conversation_state || 'INITIAL';
-    let currentData = customer.conversation_data;
     let destashState = customer.destash_conversation_state;
     let destashData = customer.destash_conversation_data;
 
@@ -364,61 +421,14 @@ async function handleMessage(sender_psid, received_message) {
                 console.error("Error during restart transaction:", error);
             }
             await clearCustomerState(customer);
-            // After clearing state, immediately start the order flow
-            await startOrderFlow(sender_psid, customer);
-            return;
-        }
-
-        if (lowerCaseMessageText.includes("help")) {
-            let helpText = "Here are the available commands:\n\n";
-            switch (currentState) {
-                case "ORDERING_AWAITING_ADDRESS":
-                    helpText += "- Provide your details in the format: Full Name, Email, Street Address, City, State, Zip\n";
-                    helpText += "- restart: Start over\n";
-                    break;
-                case "ORDERING_CHECK_ADDRESS":
-                    helpText += "- yes - Confirm your address\n";
-                    helpText += "- no - Update your address\n";
-                    helpText += "- restart: Start over\n";
-                    break;
-                case "ORDERING_SELECT_PRODUCT":
-                    helpText += "- Use the 'Select Items' button to build your order.\n";
-                    helpText += "- cart: View your current cart\n";
-                    helpText += "- restart: Start over\n";
-                    break;
-                case "AWAITING_ORDER_CONFIRMATION":
-                    helpText += "- confirm: Confirm your order\n";
-                    helpText += "- edit: Edit your order\n";
-                    helpText += "- cancel: Cancel your order\n";
-                    helpText += "- cart: View your current cart\n";
-                    helpText += "- restart: Start over\n";
-                    break;
-                case "AWAITING_PAYMENT_CONFIRMATION":
-                    helpText += "- paid: Confirm your payment\n";
-                    helpText += "- edit: Edit your order\n";
-                    helpText += "- cart: View your current cart\n";
-                    helpText += "- restart: Start over\n";
-                    break;
-                case "AWAITING_GROUP_ORDER_SELECTION":
-                    helpText += "- Select a group order by typing its name or ID, or by using the quick replies\n";
-                    helpText += "- restart: Start over\n";
-                    break;
-                case "INITIAL":
-                default:
-                    helpText += "- order: Start a new order\n";
-                    break;
-            }
-            helpText += "\n- destash: Sign up for destash notifications";
-            response = { text: helpText };
+            response = { text: "Your session has been reset. Please use the menu below to start a new order." };
             callSendAPI(sender_psid, response);
             return;
         }
-        // Start Order
-        else if (lowerCaseMessageText.includes("order") && currentState === "INITIAL") {
-            await startOrderFlow(sender_psid, customer);
-            return;
-        }
-        else if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
+
+        // We only process state-specific text inputs now (like address or email).
+        // General commands should use the Persistent Menu or Postback buttons.
+        if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
             const selectedGroupOrder = currentData.availableGroupOrders.find(go =>
                 go.name.toLowerCase() === lowerCaseMessageText || String(go.id) === messageText
             );
@@ -427,7 +437,7 @@ async function handleMessage(sender_psid, received_message) {
                 await proceedToOrderSelection(sender_psid, customer, selectedGroupOrder.id);
                 return;
             } else {
-                response = { text: "Sorry, I couldn't find a group order matching that name or ID. Please try again, or type 'help' for available commands." };
+                response = { text: "Sorry, I couldn't find a group order matching that name or ID. Please try again, or check the menu in the bottom right for help." };
                 callSendAPI(sender_psid, response);
                 return;
             }
@@ -458,7 +468,7 @@ async function handleMessage(sender_psid, received_message) {
                 response = { text: "Hmm, that doesn't look like the right format (6 parts separated by commas). Please use:\nFull Name, Email, Street Address, City, State, Zip" };
             }
         }
-        else if (currentState === "ORDERING_CHECK_ADDRESS"){
+        else if (currentState === "ORDERING_CHECK_ADDRESS") {
             if (lowerCaseMessageText.includes("yes")) {
                 await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
                 response = { text: "Great! Please use the button below to select your items." };
@@ -475,45 +485,22 @@ async function handleMessage(sender_psid, received_message) {
 
 
 
-        else if (lowerCaseMessageText.includes("cart")) {
-            await displayCart(sender_psid, currentData);
+        else if (currentState === "AWAITING_ORDER_CONFIRMATION" || currentState === "AWAITING_PAYMENT_CONFIRMATION" || currentState === "ORDERING_SELECT_PRODUCT") {
+            // Ignore random text in these states and prompt them to use the buttons
+            response = { text: "Please use the buttons provided above to manage your order, or use the menu in the bottom right for more options." };
+        }
+        // Default / Fallback
+        else {
+            console.log(`[WEBHOOK] Text fallback for PSID: ${sender_psid}. Re-sending shop card.`);
+            await startOrderFlow(sender_psid, customer);
             return;
         }
-        // Handle 'help' command
 
-        // Default / Fallback
-        else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
-            if (lowerCaseMessageText.includes("confirm")) {
-                await handleConfirmOrder(sender_psid, `CONFIRM_ORDER:${currentData.orderId}`, customer);
-                return;
-            } else if (lowerCaseMessageText.includes("edit")) {
-                await handleEditOrder(sender_psid, `EDIT_ORDER:${currentData.orderId}`, customer);
-                return;
-            } else if (lowerCaseMessageText.includes("cancel")) {
-                await handleCancelOrder(sender_psid, `CANCEL_ORDER:${currentData.orderId}`, customer);
-                return;
-            } else {
-                response = { text: "Please type 'confirm', 'edit', or 'cancel' for your order." };
-            }
+        // Send the response message if one was generated
+        if (response) {
+            callSendAPI(sender_psid, response);
         }
-
-        else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
-            if (lowerCaseMessageText.includes("edit")) {
-                await handleEditOrder(sender_psid, `EDIT_ORDER:${currentData.orderId}`, customer);
-                return;
-            } else if (lowerCaseMessageText.includes("paid")) {
-                await handleMarkPaidClaimed(sender_psid, `MARK_PAID_CLAIMED:${currentData.orderId}`, customer);
-                return;
-            } else {
-                response = { text: "Please confirm your payment by typing 'paid', edit your order by typing 'edit', or check your cart by typing 'cart'." };
-            }
     }
-
-     // Send the response message if one was generated
-     if (response) {
-        callSendAPI(sender_psid, response);
-     }
- }
 }
 
 // --- Postback Handler ---
@@ -529,19 +516,32 @@ async function handlePostback(sender_psid, received_postback) {
         // You could optionally trigger the 'order' flow here as a fallback.
     }
 
-    let customer = await getCustomerAndState(sender_psid);
+    let { customer, created } = await getCustomerAndState(sender_psid);
     let currentState = customer.conversation_state || 'INITIAL';
     let currentData = customer.conversation_data || {};
 
-    // Add Product - This path should ideally not be used anymore with the webview
-    if (payload.startsWith('ADD_PRODUCT:') && currentState === 'ORDERING_SELECT_PRODUCT') {
-        console.warn("ADD_PRODUCT postback received, webview flow expected.");
-        response = { text: "Please use the 'Select Items' button to manage your order." };
-        await callSendAPI(sender_psid, response);
-        await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+    // Welcome new users who click the Get Started button
+    if (payload === 'GET_STARTED') {
+        console.log(`[WEBHOOK] 🎉 GET_STARTED postback from PSID: ${sender_psid}`);
+        // Ensure they have the user-level menu
+        await setUserPersistentMenu(sender_psid);
+        // Send the uncollapsed card
+        await startOrderFlow(sender_psid, customer);
         return;
     }
-    // Mark Paid Claimed
+
+    // Persistent Menu Actions
+    if (payload === 'START_ORDER') {
+        await startOrderFlow(sender_psid, customer);
+        return;
+    } else if (payload === 'VIEW_CART') {
+        await displayCart(sender_psid, customer);
+        return;
+    } else if (payload === 'DESTASH_SIGNUP') {
+        await startDestashFlow(sender_psid, customer);
+        return;
+    }
+    // Backward compatibility for existing flows
     else if (payload.startsWith('MARK_PAID_CLAIMED:')) {
         await handleMarkPaidClaimed(sender_psid, payload, customer);
         return;
@@ -555,8 +555,8 @@ async function handlePostback(sender_psid, received_postback) {
     if (response) { callSendAPI(sender_psid, response); }
 }
 
-async function displayCart(sender_psid, currentData) {
-    const cartItems = currentData.currentOrderItems || {};
+async function displayCart(sender_psid, customer) {
+    const cartItems = customer.persistent_cart || {};
     if (Object.keys(cartItems).length === 0) {
         await callSendAPI(sender_psid, { text: "Your cart is empty." });
         return;
@@ -585,6 +585,7 @@ async function displayCart(sender_psid, currentData) {
         }
     }
 
+    const currentData = customer.conversation_data || {};
     const existingPaidOrders = await Order.findAll({
         where: {
             customer_id: currentData.customerId,
@@ -619,18 +620,18 @@ async function handleConfirmOrder(sender_psid, payload, customer) {
 }
 
 async function handleEditOrder(sender_psid, payload, customer) {
-     const orderId = parseInt(payload.split(':')[1]);
-     let currentData = customer.conversation_data || {};
+    const orderId = parseInt(payload.split(':')[1]);
+    let currentData = customer.conversation_data || {};
 
-     if (!isNaN(orderId)) {
-         currentData.orderId = orderId;
-         await updateCustomerState(customer, 'ORDERING_SELECT_PRODUCT', currentData);
-         await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
-     } else {
-         console.warn(`Edit order payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
-         await callSendAPI(sender_psid, { text: "Sorry, there was an issue editing your order." });
-     }
- }
+    if (!isNaN(orderId)) {
+        currentData.orderId = orderId;
+        await updateCustomerState(customer, 'ORDERING_SELECT_PRODUCT', currentData);
+        await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
+    } else {
+        console.warn(`Edit order payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
+        await callSendAPI(sender_psid, { text: "Sorry, there was an issue editing your order." });
+    }
+}
 
 async function handleCancelOrder(sender_psid, payload, customer) {
     let response;
@@ -716,7 +717,7 @@ async function handlePaymentVerified(sender_psid, orderId, customer) {
             return;
         }
 
-        const response = { text: "Great news! Your payment has been verified. Thanks for your order! If you have any questions, please message me here https://m.me/naomi.seijo.2025" };
+        const response = { text: "Great news! Your payment has been verified. Thanks for your order!" };
         await callSendAPI(sender_psid, response, 'POST_PURCHASE_UPDATE');
     } catch (error) {
         console.error(`Error handling payment verified for order ${orderId}:`, error);
@@ -746,9 +747,9 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
     try {
         const groupOrder = await GroupOrder.findByPk(groupOrderId);
         if (!groupOrder || groupOrder.status !== 'Active') {
-             await callSendAPI(sender_psid, { text: "Sorry, this group order is no longer active." });
-             await clearCustomerState(await getCustomerAndState(sender_psid));
-             return;
+            await callSendAPI(sender_psid, { text: "Sorry, this group order is no longer active." });
+            await clearCustomerState(await getCustomerAndState(sender_psid));
+            return;
         }
 
         // --- Logic to get the first featured product's image ---
@@ -782,9 +783,9 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
         // --- End of logic ---
 
     } catch (error) {
-         console.error("Error checking group order status or fetching featured image:", error);
-         await callSendAPI(sender_psid, { text: "Sorry, something went wrong before loading products." });
-         return;
+        console.error("Error checking group order status or fetching featured image:", error);
+        await callSendAPI(sender_psid, { text: "Sorry, something went wrong before loading products." });
+        return;
     }
 
     const response = {
