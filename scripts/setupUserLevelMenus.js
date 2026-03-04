@@ -19,7 +19,7 @@ async function setupUserLevelMenus() {
         let failCount = 0;
 
         for (const customer of customers) {
-            const success = await setUserPersistentMenu(customer.facebook_psid);
+            const success = await setUserPersistentMenu(customer.facebook_psid, customer);
             if (success) {
                 successCount++;
             } else {

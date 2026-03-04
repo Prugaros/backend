@@ -32,4 +32,8 @@ router.post("/submit-address", controller.submitAddress);
 router.post("/payment-sent", controller.paymentSent);
 router.get("/order-summary", controller.getOrderSummary);
 
+// Destash routes
+router.get("/destash-profile", controller.getDestashProfile);
+router.post("/signup-destash", controller.signupDestash);
+
 module.exports = router;

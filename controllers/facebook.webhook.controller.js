@@ -40,7 +40,7 @@ exports.verifyWebhook = (req, res) => {
 // --- Event Handling Entry Point ---
 exports.handleEvent = async (req, res) => {
     let body = req.body;
-    console.log('[WEBHOOK] 📨 Incoming webhook event:', JSON.stringify(body, null, 2));
+    // console.log('[WEBHOOK] 📨 Incoming webhook event:', JSON.stringify(body, null, 2));
 
     if (body.object === 'page') {
         // Process each entry in the body
@@ -54,7 +54,7 @@ exports.handleEvent = async (req, res) => {
                         continue;
                     }
 
-                    console.log(`[WEBHOOK] 🎯 Processing event for PSID ${sender_psid}...`);
+                    // console.log(`[WEBHOOK] 🎯 Processing event for PSID ${sender_psid}...`);
 
                     if (webhook_event.referral) {
                         console.log(`[WEBHOOK] → Referral event from PSID: ${sender_psid} | Ref: ${webhook_event.referral.ref}`);
@@ -71,7 +71,7 @@ exports.handleEvent = async (req, res) => {
                         console.log(`[WEBHOOK] → Postback event from PSID: ${sender_psid} | Payload: "${webhook_event.postback.payload}"`);
                         await handlePostback(sender_psid, webhook_event.postback);
                     } else if (webhook_event.read) {
-                        console.log(`[WEBHOOK] → Read receipt from PSID: ${sender_psid}`);
+                        // console.log(`[WEBHOOK] → Read receipt from PSID: ${sender_psid}`);
                     } else {
                         console.warn('[WEBHOOK] ⚠️ Unhandled webhook event type:', JSON.stringify(webhook_event));
                     }
@@ -131,20 +131,7 @@ async function clearCustomerState(customer, transaction = null) {
 }
 exports.clearCustomerState = clearCustomerState; // Exported
 
-// --- Helper functions for destash state ---
-async function updateDestashState(customer, newState, newData = null) {
-    customer.destash_conversation_state = newState;
-    if (newData !== null) {
-        customer.destash_conversation_data = newData;
-    }
-    await customer.save();
-}
 
-async function clearDestashState(customer) {
-    customer.destash_conversation_state = null;
-    customer.destash_conversation_data = {};
-    await customer.save();
-}
 
 
 async function proceedToOrderSelection(sender_psid, customer, groupOrderId) {
@@ -164,9 +151,9 @@ async function proceedToOrderSelection(sender_psid, customer, groupOrderId) {
     let responseText;
     if (existingOrder) {
         currentData.orderId = existingOrder.id;
-        responseText = "You have a pending order. Use the button below to view or edit it, or use the menu in the bottom right for more options.";
+        responseText = "Tap “Shop Now” below to continue your order. You can also open the menu in the bottom right for more options.";
     } else {
-        responseText = "Use the button below to start your order. You can also find your cart and other options in the menu in the bottom right!";
+        responseText = "Tap “Shop Now” below to start your order. You can also open the menu in the bottom right for more options.";
     }
 
     // Load cart from persistent storage and validate
@@ -247,30 +234,12 @@ async function startOrderFlow(sender_psid, customer) {
 }
 
 
-async function startDestashFlow(sender_psid, customer) {
-    let response;
-    if (customer.wants_destash_notification) {
-        response = { text: "It looks like you're already on the list for destash notifications!" };
-    } else if (customer.email) {
-        await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_CONFIRMATION");
-        response = {
-            text: `Can I use ${customer.email} to notify you about the destash?`,
-            quick_replies: [
-                { content_type: "text", title: "Yes", payload: "DESTASH_CONFIRM_EMAIL_YES" },
-                { content_type: "text", title: "No", payload: "DESTASH_CONFIRM_EMAIL_NO" }
-            ]
-        };
-    } else {
-        await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_INPUT");
-        response = { text: "To get notified about the destash, please provide your email address." };
-    }
-    await callSendAPI(sender_psid, response);
-}
+
 
 // --- Message Handler ---
 async function handleMessage(sender_psid, received_message) {
     if (received_message.is_echo) {
-        console.log(`[WEBHOOK] ↩️ Echo message from PSID ${sender_psid}, ignoring.`);
+        // console.log(`[WEBHOOK] ↩️ Echo message from PSID ${sender_psid}, ignoring.`);
         return;
     }
 
@@ -297,7 +266,7 @@ async function handleMessage(sender_psid, received_message) {
     if (!received_message.text) {
         if (received_message.attachments) {
             console.log(`[WEBHOOK] 📎 Attachment received from PSID ${sender_psid}`);
-            const response = { text: "Thanks for the attachment, I'll review this manually! If you want to order, please use the \"Visit Shop\" button in the menu in the bottom right." };
+            const response = { text: "Thanks for the attachment, I'll review this manually! If you want to order, please use the \"Shop Now\" button in the menu in the bottom right." };
             callSendAPI(sender_psid, response);
         } else {
             console.log(`[WEBHOOK] ⚠️ Unknown message type from PSID ${sender_psid}:`, JSON.stringify(received_message));
@@ -306,200 +275,14 @@ async function handleMessage(sender_psid, received_message) {
         }
         return; // Stop further processing
     }
-    let destashState = customer.destash_conversation_state;
-    let destashData = customer.destash_conversation_data;
 
-    // Global command check for "destash"
-    if (lowerCaseMessageText.includes("destash")) {
-        await startDestashFlow(sender_psid, customer);
-        return;
-    }
-
-    // Handle destash conversation flow
-    if (destashState) {
-        if (quickReplyPayload) {
-            if (destashState === "AWAITING_DESTASH_EMAIL_CONFIRMATION") {
-                if (quickReplyPayload === "DESTASH_CONFIRM_EMAIL_YES") {
-                    customer.wants_destash_notification = true;
-                    await customer.save();
-                    await clearDestashState(customer);
-                    response = { text: "Awesome, thank you! I've added you to the list." };
-                    await callSendAPI(sender_psid, response);
-                    return;
-                } else if (quickReplyPayload === "DESTASH_CONFIRM_EMAIL_NO") {
-                    await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_INPUT");
-                    response = { text: "No problem. Please provide the email address you'd like to use." };
-                    await callSendAPI(sender_psid, response);
-                    return;
-                }
-            } else if (destashState === "AWAITING_DESTASH_NEW_EMAIL_CONFIRMATION") {
-                if (quickReplyPayload === "DESTASH_NEW_EMAIL_YES") {
-                    customer.email = destashData.newEmail;
-                    customer.wants_destash_notification = true;
-                    await customer.save();
-                    await clearDestashState(customer);
-                    response = { text: "Awesome, thank you! I've added you to the list." };
-                    await callSendAPI(sender_psid, response);
-                    return;
-                } else if (quickReplyPayload === "DESTASH_NEW_EMAIL_NO") {
-                    await updateDestashState(customer, "AWAITING_DESTASH_EMAIL_INPUT");
-                    response = { text: "No problem. Please provide the email address you'd like to use." };
-                    await callSendAPI(sender_psid, response);
-                    return;
-                }
-            }
-        } else if (messageText && destashState === "AWAITING_DESTASH_EMAIL_INPUT") {
-            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-            if (emailRegex.test(messageText)) {
-                await updateDestashState(customer, "AWAITING_DESTASH_NEW_EMAIL_CONFIRMATION", { newEmail: messageText });
-                response = {
-                    text: `Is ${messageText} correct?`,
-                    quick_replies: [
-                        { content_type: "text", title: "Yes", payload: "DESTASH_NEW_EMAIL_YES" },
-                        { content_type: "text", title: "No", payload: "DESTASH_NEW_EMAIL_NO" }
-                    ]
-                };
-            } else {
-                response = { text: "That doesn't look like a valid email. Please try again." };
-            }
-            await callSendAPI(sender_psid, response);
-            return;
-        }
-    }
-
-    // Handle Text Quick Replies for main conversation
-    if (quickReplyPayload) {
-        if (currentState === "ORDERING_CHECK_ADDRESS") {
-            if (quickReplyPayload === "CONFIRM_ADDRESS_YES") {
-                await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
-                // response = { text: "Great! Please use the button below to select your items." };
-                await callSendAPI(sender_psid, response);
-                await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
-                return;
-            } else if (quickReplyPayload === "CONFIRM_ADDRESS_NO") {
-                await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS");
-                response = { text: "Okay, please provide your updated details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
-                await callSendAPI(sender_psid, response);
-                return;
-            }
-        } else if (currentState === "AWAITING_ORDER_CONFIRMATION") {
-            if (quickReplyPayload.startsWith("CONFIRM_ORDER:")) {
-                await handleConfirmOrder(sender_psid, quickReplyPayload, customer);
-                return;
-            } else if (quickReplyPayload.startsWith("EDIT_ORDER:")) {
-                await handleEditOrder(sender_psid, quickReplyPayload, customer);
-                return;
-            } else if (quickReplyPayload.startsWith("CANCEL_ORDER:")) {
-                await handleCancelOrder(sender_psid, quickReplyPayload, customer);
-                return;
-            }
-        } else if (currentState === "AWAITING_PAYMENT_CONFIRMATION") {
-            if (quickReplyPayload.startsWith("MARK_PAID_CLAIMED:")) {
-                await handleMarkPaidClaimed(sender_psid, quickReplyPayload, customer);
-                return;
-            }
-        } else if (quickReplyPayload.startsWith("MARK_PAID_CLAIMED:")) {
-            await handleMarkPaidClaimed(sender_psid, payload, customer);
-            return;
-        } else {
-            console.warn(`Unhandled text quick reply payload: ${quickReplyPayload}`);
-        }
-    }
 
     // Handle Regular Text Messages
     if (messageText) {
-        if (lowerCaseMessageText.includes("restart")) {
-            const t = await sequelize.transaction();
-            try {
-                if (currentData.orderId) {
-                    await refundCreditForCancelledOrder(currentData.orderId, t);
-                    await Order.update({ payment_status: 'Cancelled' }, { where: { id: currentData.orderId, customer_id: customer.id }, transaction: t });
-                }
-                await t.commit();
-            } catch (error) {
-                await t.rollback();
-                console.error("Error during restart transaction:", error);
-            }
-            await clearCustomerState(customer);
-            response = { text: "Your session has been reset. Please use the menu below to start a new order." };
-            callSendAPI(sender_psid, response);
-            return;
-        }
-
-        // We only process state-specific text inputs now (like address or email).
-        // General commands should use the Persistent Menu or Postback buttons.
-        if (currentState === "AWAITING_GROUP_ORDER_SELECTION") {
-            const selectedGroupOrder = currentData.availableGroupOrders.find(go =>
-                go.name.toLowerCase() === lowerCaseMessageText || String(go.id) === messageText
-            );
-
-            if (selectedGroupOrder) {
-                await proceedToOrderSelection(sender_psid, customer, selectedGroupOrder.id);
-                return;
-            } else {
-                response = { text: "Sorry, I couldn't find a group order matching that name or ID. Please try again, or check the menu in the bottom right for help." };
-                callSendAPI(sender_psid, response);
-                return;
-            }
-        }
-        // Handle Address/Info Input
-        else if (currentState === "ORDERING_AWAITING_ADDRESS") {
-            const parts = messageText.split(",").map(p => p.trim());
-            if (parts.length === 6) {
-                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                if (!emailRegex.test(parts[1])) {
-                    response = { text: "Hmm, that doesn't look like a valid email address. Please try again in the format:\nFull Name, Email, Street Address, City, State, Zip" };
-                } else {
-                    try {
-                        customer.name = parts[0]; customer.email = parts[1]; customer.street_address = parts[2];
-                        customer.city = parts[3]; customer.state = parts[4]; customer.zip = parts[5];
-                        customer.is_international = false; customer.international_address_block = null;
-                        await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
-                        response = { text: "Thanks! Your details are saved. Please use the button below to select your items." };
-                        await callSendAPI(sender_psid, response);
-                        await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
-                        return;
-                    } catch (error) {
-                        console.error("Error saving customer details:", error);
-                        response = { text: "Sorry, there was an error saving your details." };
-                    }
-                }
-            } else {
-                response = { text: "Hmm, that doesn't look like the right format (6 parts separated by commas). Please use:\nFull Name, Email, Street Address, City, State, Zip" };
-            }
-        }
-        else if (currentState === "ORDERING_CHECK_ADDRESS") {
-            if (lowerCaseMessageText.includes("yes")) {
-                await updateCustomerState(customer, "ORDERING_SELECT_PRODUCT");
-                response = { text: "Great! Please use the button below to select your items." };
-                await callSendAPI(sender_psid, response);
-                await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
-                return;
-            } else if (lowerCaseMessageText.includes("no")) {
-                await updateCustomerState(customer, "ORDERING_AWAITING_ADDRESS");
-                response = { text: "Okay, please provide your updated details in this format (separate each part with a comma):\nFull Name, Email, Street Address, City, State, Zip" };
-                await callSendAPI(sender_psid, response);
-                return;
-            }
-        }
-
-
-
-        else if (currentState === "AWAITING_ORDER_CONFIRMATION" || currentState === "AWAITING_PAYMENT_CONFIRMATION" || currentState === "ORDERING_SELECT_PRODUCT") {
-            // Ignore random text in these states and prompt them to use the buttons
-            response = { text: "Please use the buttons provided above to manage your order, or use the menu in the bottom right for more options." };
-        }
-        // Default / Fallback
-        else {
-            console.log(`[WEBHOOK] Text fallback for PSID: ${sender_psid}. Re-sending shop card.`);
-            await startOrderFlow(sender_psid, customer);
-            return;
-        }
-
-        // Send the response message if one was generated
-        if (response) {
-            callSendAPI(sender_psid, response);
-        }
+        // Every text message triggers the shop card flow
+        console.log(`[WEBHOOK] Text received from PSID: ${sender_psid}. Sending shop card.`);
+        await startOrderFlow(sender_psid, customer);
+        return;
     }
 }
 
@@ -507,25 +290,14 @@ async function handleMessage(sender_psid, received_message) {
 async function handlePostback(sender_psid, received_postback) {
     let response;
     const payload = received_postback.payload;
-    const referral = received_postback.referral; // Check for referral for new users
 
-    // Handle m.me link referral for new users
-    if (referral && referral.ref && referral.ref.startsWith('go_')) {
-        console.warn(`Referral received on postback, but this flow is deprecated. Ref: ${referral.ref}`);
-        // The new flow uses ?text=order, so this part is unlikely to be hit.
-        // You could optionally trigger the 'order' flow here as a fallback.
-    }
-
-    let { customer, created } = await getCustomerAndState(sender_psid);
+    let { customer } = await getCustomerAndState(sender_psid);
     let currentState = customer.conversation_state || 'INITIAL';
-    let currentData = customer.conversation_data || {};
 
     // Welcome new users who click the Get Started button
     if (payload === 'GET_STARTED') {
         console.log(`[WEBHOOK] 🎉 GET_STARTED postback from PSID: ${sender_psid}`);
-        // Ensure they have the user-level menu
         await setUserPersistentMenu(sender_psid);
-        // Send the uncollapsed card
         await startOrderFlow(sender_psid, customer);
         return;
     }
@@ -537,19 +309,21 @@ async function handlePostback(sender_psid, received_postback) {
     } else if (payload === 'VIEW_CART') {
         await displayCart(sender_psid, customer);
         return;
-    } else if (payload === 'DESTASH_SIGNUP') {
-        await startDestashFlow(sender_psid, customer);
-        return;
-    }
-    // Backward compatibility for existing flows
-    else if (payload.startsWith('MARK_PAID_CLAIMED:')) {
-        await handleMarkPaidClaimed(sender_psid, payload, customer);
-        return;
+    } else if (payload === 'SET_NOTIF_GROUP_ORDER_ENABLED') {
+        customer.disable_grouporder_notification = false;
+        await customer.save();
+        await setUserPersistentMenu(sender_psid, customer);
+        response = { text: "Group order notifications enabled! You'll receive a message when new group orders open." };
+    } else if (payload === 'SET_NOTIF_GROUP_ORDER_DISABLED') {
+        customer.disable_grouporder_notification = true;
+        await customer.save();
+        await setUserPersistentMenu(sender_psid, customer);
+        response = { text: "Group order notifications disabled. You can re-enable them anytime from the same menu." };
     }
     // Fallback
     else {
         console.warn(`Unhandled postback payload: ${payload} in state: ${currentState}`);
-        response = { "text": `Received: ${payload}` };
+        response = { "text": "Sorry, I didn't understand that action. Use the menu in the bottom right to shop!" };
     }
 
     if (response) { callSendAPI(sender_psid, response); }
@@ -585,121 +359,26 @@ async function displayCart(sender_psid, customer) {
         }
     }
 
-    const currentData = customer.conversation_data || {};
-    const existingPaidOrders = await Order.findAll({
-        where: {
-            customer_id: currentData.customerId,
-            group_order_id: currentData.groupOrderId,
-            payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
+    // Attempt to calculate total with shipping
+    let shippingCost = 5.50;
+    try {
+        const activeGroupOrder = await GroupOrder.findOne({ where: { status: 'Active' } });
+        if (activeGroupOrder) {
+            const existingPaidOrders = await Order.findAll({
+                where: {
+                    customer_id: customer.id,
+                    group_order_id: activeGroupOrder.id,
+                    payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
+                }
+            });
+            if (existingPaidOrders.length > 0) shippingCost = 0.00;
         }
-    });
+    } catch (e) { console.error("Error calculating shipping in displayCart:", e); }
 
-    const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
     const totalAmount = subtotal + shippingCost;
 
     cartText += `\nSubtotal: $${subtotal.toFixed(2)}\nShipping: $${shippingCost.toFixed(2)}\nTotal: $${totalAmount.toFixed(2)}`;
     await callSendAPI(sender_psid, { text: cartText });
-}
-
-// --- Specific Handler Functions ---
-
-async function handleConfirmOrder(sender_psid, payload, customer) {
-    const orderId = parseInt(payload.split(':')[1]);
-    let currentData = customer.conversation_data || {};
-
-    if (!isNaN(orderId) && orderId === currentData.orderId) {
-        // This function is likely deprecated by the new webview flow,
-        // but we'll keep it for now and just confirm the order.
-        // The webview should now handle the payment flow.
-        await updateCustomerState(customer, 'AWAITING_PAYMENT_CONFIRMATION', currentData);
-        await callSendAPI(sender_psid, { text: "Awesome! Please send payment via friends and family to one of these two options:\n\nVenmo (preferred): @naomiseijo\n(Last 4 digits: 5176 - Add this if needed)\n\nor\nPayPal: seijon386@yahoo.com" });
-    } else {
-        console.warn(`Order confirmation payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
-        await callSendAPI(sender_psid, { text: "Sorry, there was an issue confirming your order." });
-    }
-}
-
-async function handleEditOrder(sender_psid, payload, customer) {
-    const orderId = parseInt(payload.split(':')[1]);
-    let currentData = customer.conversation_data || {};
-
-    if (!isNaN(orderId)) {
-        currentData.orderId = orderId;
-        await updateCustomerState(customer, 'ORDERING_SELECT_PRODUCT', currentData);
-        await sendProductSelectionWebviewButton(sender_psid, currentData.groupOrderId);
-    } else {
-        console.warn(`Edit order payload mismatch/invalid. Payload: ${payload}, State Order ID: ${currentData.orderId}`);
-        await callSendAPI(sender_psid, { text: "Sorry, there was an issue editing your order." });
-    }
-}
-
-async function handleCancelOrder(sender_psid, payload, customer) {
-    let response;
-    const orderId = parseInt(payload.split(':')[1]);
-    let currentData = customer.conversation_data || {};
-
-    if (!isNaN(orderId) && orderId === currentData.orderId) {
-        const t = await sequelize.transaction();
-        try {
-            const customerIdForCancel = currentData?.customerId;
-            if (!customerIdForCancel) {
-                console.error(`Cannot cancel order ${orderId}, customer ID missing.`);
-                response = { text: "Sorry, error cancelling." };
-            } else {
-                await refundCreditForCancelledOrder(orderId, t);
-                const [num] = await Order.update({ payment_status: 'Cancelled' }, { where: { id: orderId, customer_id: customerIdForCancel }, transaction: t });
-                response = (num === 1) ? { text: "Okay, your order has been cancelled." } : { text: "Sorry, couldn't find order to cancel." };
-            }
-            await t.commit();
-            await clearCustomerState(customer);
-            return;
-        } catch (error) {
-            await t.rollback();
-            console.error(`Error cancelling order ${orderId}:`, error);
-            response = { text: "Sorry, error cancelling." };
-        }
-    } else {
-        response = { text: "Sorry, issue cancelling your order." };
-    }
-    callSendAPI(sender_psid, response);
-}
-
-async function handleMarkPaidClaimed(sender_psid, payload, customer) {
-    let response;
-    const orderId = parseInt(payload.split(':')[1]);
-    if (!isNaN(orderId)) {
-        const t = await sequelize.transaction();
-        try {
-            if (!customer) {
-                console.error(`Cannot mark order ${orderId} paid, customer object invalid.`);
-                response = { text: "Sorry, error finding your record." };
-            } else {
-                const { appliedCredit, newTotal } = await applyCreditToOrder(orderId, t);
-                const [num] = await Order.update({ payment_status: 'Payment Claimed' }, { where: { id: orderId, customer_id: customer.id }, transaction: t });
-
-                if (appliedCredit > 0) {
-                    const message = {
-                        text: `We've applied a credit of $${appliedCredit.toFixed(2)} to your order. Your new total is $${newTotal.toFixed(2)}.`
-                    };
-                    await callSendAPI(sender_psid, message);
-                }
-
-                response = (num === 1) ? { text: "Thanks for confirming! We'll verify payment soon. Be sure to like this page for information on future group orders! https://www.facebook.com/naomisgrouporders" } : { text: "Sorry, couldn't find that order." };
-                await callSendAPI(sender_psid, response);
-                await sendOrderSummaryMessage(sender_psid, orderId);
-                await clearCustomerState(customer, t);
-                await t.commit();
-                return;
-            }
-        } catch (error) {
-            await t.rollback();
-            console.error(`Error marking order ${orderId} paid:`, error);
-            response = { text: "Sorry, error updating payment status." };
-        }
-    } else {
-        response = { text: "Sorry, couldn't identify which order." };
-    }
-    callSendAPI(sender_psid, response);
 }
 
 async function handlePaymentVerified(sender_psid, orderId, customer) {
@@ -808,7 +487,7 @@ async function sendProductSelectionWebviewButton(sender_psid, groupOrderId) {
                             {
                                 type: "web_url",
                                 url: webviewUrl,
-                                title: "Select Items",
+                                title: "Shop Now",
                                 webview_height_ratio: "full",
                                 messenger_extensions: false
                             }

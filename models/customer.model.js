@@ -154,6 +154,11 @@ module.exports = (sequelize, DataTypes) => {
           this.setDataValue('destash_conversation_data', JSON.stringify(value));
         }
       }
+    },
+    disable_grouporder_notification: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false
     }
     // Timestamps (createdAt, updatedAt) added automatically
   }, {

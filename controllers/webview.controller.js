@@ -9,7 +9,7 @@ const sequelize = db.sequelize;
 const { Op } = require("sequelize");
 const { updateCustomerState, getCustomerAndState, clearCustomerState, sendOrderSummaryMessage } = require("./facebook.webhook.controller"); // Import necessary functions
 const { applyCreditToOrder } = require("./storeCredit.controller");
-const { callSendAPI } = require("../utils/facebookApi");
+const { callSendAPI, setUserPersistentMenu } = require("../utils/facebookApi");
 
 
 // Helper to validate cart items
@@ -361,7 +361,7 @@ exports.getAddress = async (req, res) => {
             });
             hasPaidOrders = existingPaidOrders.length > 0;
 
-            let shippingCost = hasPaidOrders ? 0.00 : 5.00;
+            let shippingCost = hasPaidOrders ? 0.00 : 5.50;
             if (customer.country && customer.country !== 'United States') {
                 const totalQuantity = detailedOrderItems.reduce((sum, item) => sum + item.quantity, 0);
                 shippingCost = totalQuantity * 1.70;
@@ -460,7 +460,7 @@ exports.saveAddress = async (req, res) => {
                             payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
                         }
                     });
-                    shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+                    shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.50;
                 }
 
                 const subtotal = order.orderItems.reduce((sum, item) => sum + (item.quantity * item.price_at_order_time), 0);
@@ -537,7 +537,7 @@ exports.updateCart = async (req, res) => {
                     payment_status: { [Op.in]: ['Payment Claimed', 'Paid'] }
                 }
             });
-            const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.00;
+            const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.50;
             const totalAmount = subtotal + shippingCost;
 
             let order = await Order.findOne({
@@ -685,5 +685,53 @@ exports.setGroupOrder = async (req, res) => {
     } catch (error) {
         console.error(`Error in setGroupOrder for PSID ${psid}:`, error);
         res.status(500).send({ message: "Error setting group order." });
+    }
+};
+
+exports.getDestashProfile = async (req, res) => {
+    const psid = req.query.psid;
+    if (!psid) return res.status(400).send({ message: "Missing PSID." });
+
+    try {
+        const customer = await Customer.findOne({ where: { facebook_psid: psid } });
+        if (!customer) return res.status(404).send({ message: "Customer not found." });
+
+        res.send({
+            email: customer.email || '',
+            wants_destash_notification: customer.wants_destash_notification
+        });
+    } catch (error) {
+        console.error(`Error fetching destash profile for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error retrieving destash profile." });
+    }
+};
+
+exports.signupDestash = async (req, res) => {
+    const { psid, email } = req.body;
+    if (!psid || !email) return res.status(400).send({ message: "Missing PSID or Email." });
+
+    try {
+        const customer = await Customer.findOne({ where: { facebook_psid: psid } });
+        if (!customer) return res.status(404).send({ message: "Customer not found." });
+
+        customer.wants_destash_notification = true;
+
+        if (!customer.email) {
+            customer.email = email;
+        } else if (customer.email !== email) {
+            const data = customer.destash_conversation_data || {};
+            data.secondaryEmail = email;
+            customer.destash_conversation_data = data;
+        }
+
+        await customer.save();
+
+        // Update persistent menu to show the checkmark
+        await setUserPersistentMenu(psid);
+
+        res.send({ message: "Successfully signed up for destash notifications!" });
+    } catch (error) {
+        console.error(`Error signing up for destash for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error signing up for destash." });
     }
 };

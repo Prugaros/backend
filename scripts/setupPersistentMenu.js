@@ -11,7 +11,12 @@ async function setupPersistentMenu() {
 
     const url = `https://graph.facebook.com/v25.0/me/messenger_profile?access_token=${PAGE_ACCESS_TOKEN}`;
 
-    const frontendUrl = process.env.FRONTEND_URL || 'https://local.naomisgrouporders.com';
+    const frontendUrl = process.env.FRONTEND_URL;
+    if (!frontendUrl) {
+        console.error("FRONTEND_URL not found in environment variables.");
+        return;
+    }
+    const webviewUrl = `${frontendUrl}/messenger-order`;
 
     const payload = {
         "get_started": {
@@ -23,9 +28,16 @@ async function setupPersistentMenu() {
                 "composer_input_disabled": false,
                 "call_to_actions": [
                     {
-                        "type": "postback",
-                        "title": "Visit Shop",
-                        "payload": "START_ORDER"
+                        "type": "web_url",
+                        "title": "Shop Now",
+                        "url": webviewUrl,
+                        "webview_height_ratio": "compact"
+                    },
+                    {
+                        "type": "web_url",
+                        "title": "Signup for Destash",
+                        "url": `${frontendUrl}/destash-signup`,
+                        "webview_height_ratio": "compact"
                     },
                     {
                         "type": "web_url",

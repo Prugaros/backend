@@ -9,6 +9,7 @@ const axios = require('axios'); // For making HTTP requests (e.g., to Facebook A
 const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
+const { callSendAPI } = require("../utils/facebookApi");
 
 // Create and Save a new GroupOrder
 exports.create = async (req, res) => {
@@ -252,6 +253,98 @@ exports.startOrder = async (req, res) => {
     groupOrder.facebook_post_id = facebookPostId;
     groupOrder.start_date = new Date();
     await groupOrder.save();
+
+    // --- Send Notifications to All Eligible Customers ---
+    try {
+      // Find all customers who haven't opted out and have a PSID
+      const customersToNotify = await Customer.findAll({
+        where: {
+          disable_grouporder_notification: false,
+          facebook_psid: { [Op.not]: null }
+        }
+      });
+
+      if (customersToNotify.length > 0) {
+        console.log(`[NOTIF] Notifying ${customersToNotify.length} customers about new Group Order.`);
+
+        const frontendBaseUrl = process.env.FRONTEND_URL;
+        let featuredImageUrl = "https://via.placeholder.com/300x200?text=Select+Items"; // Default
+
+        try {
+          const featuredCollections = await db.Collection.findAll({
+            where: { is_featured: true, isActive: true, '$brand.isActive$': true },
+            include: [
+              { model: db.Product, as: 'products', where: { is_active: true }, required: false },
+              { model: db.Brand, as: 'brand', attributes: ['name', 'isActive'], where: { isActive: true } }
+            ],
+            order: [['displayOrder', 'ASC']]
+          });
+
+          const firstCollectionWithProducts = featuredCollections.find(c => c.products && c.products.length > 0);
+          if (firstCollectionWithProducts) {
+            const firstProduct = firstCollectionWithProducts.products[0];
+            if (firstProduct && firstProduct.images && firstProduct.images.length > 0) {
+              featuredImageUrl = firstProduct.images[0].startsWith('http') ? firstProduct.images[0] : `${process.env.BACKEND_URL}/${firstProduct.images[0]}`;
+            }
+          }
+        } catch (imgErr) {
+          console.error("[NOTIF] Error fetching featured image for notification:", imgErr);
+        }
+
+        const formatDate = (date) => {
+          if (!date) return "??/??";
+          const d = new Date(date);
+          const month = (d.getMonth() + 1).toString().padStart(1, '0');
+          const day = d.getDate().toString().padStart(1, '0');
+          return `${month}/${day}`;
+        };
+
+        const dateRangeTitle = `${formatDate(groupOrder.start_date)} - ${formatDate(groupOrder.end_date)} Group Order Now Open!`;
+
+        for (const customer of customersToNotify) {
+          try {
+            const webviewUrl = `${frontendBaseUrl}/messenger-order?psid=${encodeURIComponent(customer.facebook_psid)}`;
+            const notificationPayload = {
+              attachment: {
+                type: "template",
+                payload: {
+                  template_type: "generic",
+                  elements: [
+                    {
+                      title: dateRangeTitle,
+                      image_url: featuredImageUrl,
+                      subtitle: "A new Japan group order is open. Click below to start shopping.",
+                      default_action: {
+                        type: "web_url",
+                        url: webviewUrl,
+                        webview_height_ratio: "full",
+                        messenger_extensions: false
+                      },
+                      buttons: [
+                        {
+                          type: "web_url",
+                          url: webviewUrl,
+                          title: "Shop Now",
+                          webview_height_ratio: "full",
+                          messenger_extensions: false
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            };
+
+            await callSendAPI(customer.facebook_psid, notificationPayload, 'POST_PURCHASE_UPDATE');
+            await new Promise(resolve => setTimeout(resolve, 100)); // Rate limiting
+          } catch (notifErr) {
+            console.error(`[NOTIF] Failed to notify customer ${customer.id}:`, notifErr.message);
+          }
+        }
+      }
+    } catch (notifFlowErr) {
+      console.error("[NOTIF] Error in notification flow:", notifFlowErr);
+    }
 
     res.send({ message: "Group Order started successfully.", facebookPostId: facebookPostId });
 
