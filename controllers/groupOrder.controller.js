@@ -11,6 +11,26 @@ const path = require('path');
 const FormData = require('form-data');
 const { callSendAPI } = require("../utils/facebookApi");
 
+const formatSmartDate = (date, includeYear = true) => {
+  if (!date) return "??/??";
+  const d = new Date(date);
+  // Check if it's exactly midnight UTC (standard for date pickers)
+  const isMidnightUTC =
+    d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+
+  if (isMidnightUTC) {
+    const month = d.getUTCMonth() + 1;
+    const day = d.getUTCDate();
+    const year = d.getUTCFullYear();
+    return includeYear ? `${month}/${day}/${year}` : `${month}/${day}`;
+  } else {
+    const month = d.getMonth() + 1;
+    const day = d.getDate();
+    const year = d.getFullYear();
+    return includeYear ? `${month}/${day}/${year}` : `${month}/${day}`;
+  }
+};
+
 // Create and Save a new GroupOrder
 exports.create = async (req, res) => {
   // Validate request
@@ -165,7 +185,8 @@ exports.startOrder = async (req, res) => {
           const featuredProducts = products.filter(p => p.is_featured || (p.collection && p.collection.is_featured));
 
           // 1. Format the post message
-          let postMessage = `${groupOrder.start_date.toLocaleDateString()}–${groupOrder.end_date.toLocaleDateString()} GROUP ORDER NOW OPEN\n\n`;
+
+          let postMessage = `${formatSmartDate(groupOrder.start_date)}–${formatSmartDate(groupOrder.end_date)} GROUP ORDER NOW OPEN\n\n`;
           postMessage += `${groupOrder.custom_message}\n\n`;
 
           // Add Messenger link. The `ref` parameter has proven unreliable.
@@ -251,7 +272,9 @@ exports.startOrder = async (req, res) => {
     // --- Update DB Status ---
     groupOrder.status = 'Active';
     groupOrder.facebook_post_id = facebookPostId;
+
     groupOrder.start_date = new Date();
+
     await groupOrder.save();
 
     // --- Send Notifications to All Eligible Customers ---
@@ -290,7 +313,6 @@ exports.startOrder = async (req, res) => {
         } catch (imgErr) {
           console.error("[NOTIF] Error fetching featured image for notification:", imgErr);
         }
-
         const formatDate = (date) => {
           if (!date) return "??/??";
           const d = new Date(date);
@@ -299,7 +321,7 @@ exports.startOrder = async (req, res) => {
           return `${month}/${day}`;
         };
 
-        const dateRangeTitle = `${formatDate(groupOrder.start_date)} - ${formatDate(groupOrder.end_date)} Group Order Now Open!`;
+        const dateRangeTitle = `${formatDate(groupOrder.start_date, false)} - ${formatSmartDate(groupOrder.end_date, false)} Group Order Now Open!`;
 
         for (const customer of customersToNotify) {
           try {
