@@ -199,7 +199,10 @@ exports.getFeaturedData = async (req, res) => {
                     where: { isActive: true }
                 }
             ],
-            order: [['displayOrder', 'ASC']]
+            order: [
+                ['DisplayOrder', 'ASC'],
+                [{ model: db.Product, as: 'products' }, 'collectionProductOrder', 'DESC']
+            ]
         });
 
         // Extract product IDs from the featured collections to exclude them from "other" featured items
@@ -225,7 +228,8 @@ exports.getFeaturedData = async (req, res) => {
                     where: { isActive: true },
                     required: false // Use left join to include products with no collection
                 }
-            ]
+            ],
+            order: [['collectionProductOrder', 'DESC'], ['name', 'ASC']]
         });
 
         // Further filter to exclude items whose collection is featured, even if the item itself is marked as featured
@@ -263,7 +267,10 @@ exports.getBrandData = async (req, res) => {
                 where: { is_active: true },
                 required: false,
             }],
-            order: [['displayOrder', 'ASC']]
+            order: [
+                ['DisplayOrder', 'ASC'],
+                [{ model: db.Product, as: 'products' }, 'collectionProductOrder', 'DESC']
+            ]
         });
 
         // Separate active and inactive collections
@@ -279,11 +286,18 @@ exports.getBrandData = async (req, res) => {
                 brandId: brandId,
                 is_active: true,
                 collectionId: { [Op.is]: null }
-            }
+            },
+            order: [['collectionProductOrder', 'DESC'], ['name', 'ASC']]
         });
 
-        // Combine products from inactive collections and those with no collection
+        // Combine and sort by collectionProductOrder DESC, then name ASC
         const otherBrandItems = [...productsFromInactiveCollections, ...productsWithNoCollection];
+        otherBrandItems.sort((a, b) => {
+            if (b.collectionProductOrder !== a.collectionProductOrder) {
+                return (b.collectionProductOrder || 0) - (a.collectionProductOrder || 0);
+            }
+            return a.name.localeCompare(b.name);
+        });
 
         const responseData = {
             ...brand.toJSON(),
