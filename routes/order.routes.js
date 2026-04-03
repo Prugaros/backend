@@ -27,6 +27,9 @@ router.get("/export/csv", orders.exportCsv); // Keep GET for simplicity, could b
 // Retrieve a single Order with id
 router.get("/:id", orders.findOne);
 
+// Update a single Order completely (including items)
+router.put("/:id", orders.update);
+
 // Update Payment Status (e.g., Mark as Paid)
 router.put("/:id/payment-status", orders.updatePaymentStatus); // Added this route
 

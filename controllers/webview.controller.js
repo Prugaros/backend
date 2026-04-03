@@ -87,16 +87,33 @@ exports.getOrderData = async (req, res) => {
             normalizedCurrentCart[productId] = typeof itemData === 'object' ? itemData.quantity : itemData;
         });
 
+        const hasActiveCart = Object.keys(normalizedCurrentCart).length > 0;
+        
+        let hasSubmittedOrderForActiveGroupOrder = false;
+        // Suppress decision screen if there is an active cart
+        if (!hasActiveCart) {
+            const existingSubmittedOrder = await Order.findOne({
+                where: {
+                    customer_id: customer.id,
+                    group_order_id: groupOrderId,
+                    payment_status: { [Op.notIn]: ['Cancelled'] },
+                    id: { [Op.ne]: currentData.orderId || -1 }
+                }
+            });
+            hasSubmittedOrderForActiveGroupOrder = !!existingSubmittedOrder;
+        }
+
         res.send({
             groupOrderName: groupOrder.name,
             brands: brands,
             currentCart: normalizedCurrentCart,
-            prunedItems: prunedNames // Send to frontend to trigger popup
+            prunedItems: prunedNames, // Send to frontend to trigger popup
+            hasSubmittedOrderForActiveGroupOrder
         });
 
     } catch (error) {
-        console.error(`Error in paymentSent for PSID ${psid}:`, error);
-        res.status(500).send({ message: "Error processing payment sent." });
+        console.error(`Error in getOrderData for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error gathering order data." });
     }
 };
 
@@ -540,13 +557,17 @@ exports.updateCart = async (req, res) => {
             const shippingCost = existingPaidOrders.length > 0 ? 0.00 : 5.50;
             const totalAmount = subtotal + shippingCost;
 
-            let order = await Order.findOne({
-                where: {
-                    customer_id: currentData.customerId,
-                    group_order_id: currentData.groupOrderId,
-                    payment_status: { [Op.notIn]: ['Paid', 'Cancelled', 'Payment Claimed'] }
-                }
-            });
+            let order = null;
+            if (currentData.orderId) {
+                order = await Order.findOne({
+                    where: {
+                        id: currentData.orderId,
+                        customer_id: currentData.customerId,
+                        group_order_id: currentData.groupOrderId,
+                        payment_status: { [Op.notIn]: ['Paid', 'Cancelled', 'Payment Claimed'] }
+                    }
+                });
+            }
 
             if (order) {
                 await order.update({
@@ -608,8 +629,13 @@ exports.submitAddress = async (req, res) => {
     }
     try {
         const { customer } = await getCustomerAndState(psid);
-        await updateCustomerState(customer, "AWAITING_PAYMENT_CONFIRMATION");
-        res.status(200).send({ message: "State updated to AWAITING_PAYMENT_CONFIRMATION." });
+        
+        let currentData = customer.conversation_data || {};
+        
+        customer.persistent_cart = {};
+        
+        await updateCustomerState(customer, "AWAITING_PAYMENT_CONFIRMATION", currentData);
+        res.status(200).send({ message: "State updated to AWAITING_PAYMENT_CONFIRMATION and cart cleared." });
     } catch (error) {
         console.error(`Error in submitAddress for PSID ${psid}:`, error);
         res.status(500).send({ message: "Error updating state." });
@@ -735,3 +761,152 @@ exports.signupDestash = async (req, res) => {
         res.status(500).send({ message: "Error signing up for destash." });
     }
 };
+
+exports.getOrderStatus = async (req, res) => {
+    const psid = req.query.psid;
+    if (!psid) return res.status(400).send({ message: "Missing PSID." });
+
+    try {
+        const customer = await Customer.findOne({ where: { facebook_psid: psid } });
+        if (!customer) return res.status(404).send({ message: "Customer not found." });
+
+        const orders = await db.Order.findAll({
+            where: {
+                customer_id: customer.id,
+                payment_status: { [Op.notIn]: ['Cancelled'] }
+            },
+            include: [
+                {
+                    model: db.OrderItem,
+                    as: 'orderItems',
+                    include: [{
+                        model: db.Product,
+                        as: 'orderProduct',
+                        attributes: ['id', 'name'],
+                        paranoid: false
+                    }]
+                },
+                {
+                    model: db.GroupOrder,
+                    as: 'groupOrder',
+                    attributes: ['id', 'name', 'status']
+                },
+                {
+                    model: db.Refund,
+                    as: 'refunds',
+                    include: [{
+                        model: db.Product,
+                        as: 'product',
+                        attributes: ['id', 'name'],
+                        paranoid: false
+                    }]
+                }
+            ],
+            order: [['order_date', 'DESC']]
+        });
+
+        const groupedOrdersMap = {};
+
+        orders.forEach(order => {
+            const goId = order.group_order_id || `no-group-${order.id}`;
+            if (!groupedOrdersMap[goId]) {
+                groupedOrdersMap[goId] = {
+                    id: `group-${goId}`,
+                    groupOrderName: order.groupOrder ? order.groupOrder.name : 'Unknown Group Order',
+                    groupOrderIsActive: order.groupOrder ? order.groupOrder.status === 'Active' : false,
+                    orderDate: order.order_date,
+                    itemsMap: {},
+                    subtotal: 0,
+                    shipping: 0,
+                    appliedCredit: 0,
+                    total: 0,
+                    payment_statuses: new Set(),
+                    shipping_statuses: new Set()
+                };
+            }
+            const group = groupedOrdersMap[goId];
+
+            if (new Date(order.order_date) < new Date(group.orderDate)) {
+                group.orderDate = order.order_date;
+            }
+
+            group.shipping += parseFloat(order.shipping_cost || 0);
+            group.appliedCredit += parseFloat(order.applied_credit || 0);
+            group.total += parseFloat(order.total_amount || 0);
+            group.payment_statuses.add(order.payment_status);
+            if (order.shipping_status) {
+                group.shipping_statuses.add(order.shipping_status);
+            }
+
+            const refundedQtyMap = {};
+            (order.refunds || []).forEach(r => {
+                refundedQtyMap[r.product_id] = (refundedQtyMap[r.product_id] || 0) + r.quantity;
+            });
+
+            order.orderItems.forEach(item => {
+                const price = parseFloat(item.price_at_order_time);
+                const name = item.orderProduct ? item.orderProduct.name : 'Unknown Item';
+                const productId = item.product_id || name;
+                const key = `${productId}-${price}`;
+
+                if (!group.itemsMap[key]) {
+                    group.itemsMap[key] = {
+                        name: name,
+                        quantity: 0,
+                        price: price,
+                        lineTotal: 0,
+                        refundedQty: 0
+                    };
+                }
+                group.itemsMap[key].quantity += item.quantity;
+                group.itemsMap[key].lineTotal += (item.quantity * price);
+                group.itemsMap[key].refundedQty += (refundedQtyMap[item.product_id] || 0);
+                
+                group.subtotal += (item.quantity * price);
+            });
+        });
+
+        const formattedOrders = Object.values(groupedOrdersMap).map(group => {
+            let payment_status = 'Paid';
+            if (group.payment_statuses.has('Error')) payment_status = 'Error';
+            else if (group.payment_statuses.has('Invoice Sent')) payment_status = 'Invoice Sent';
+            else if (group.payment_statuses.has('Payment Claimed')) payment_status = 'Payment Claimed';
+
+            let shipping_status = 'Pending';
+            if (group.shipping_statuses.has('Issue')) shipping_status = 'Issue';
+            else if (group.shipping_statuses.has('Pending')) shipping_status = 'Pending';
+            else if (group.shipping_statuses.has('Processing')) shipping_status = 'Processing';
+            else if (group.shipping_statuses.has('Packed')) shipping_status = 'Packed';
+            else if (group.shipping_statuses.has('Shipped')) shipping_status = 'Shipped';
+            else if (group.shipping_statuses.has('Delivered')) shipping_status = 'Delivered';
+
+            return {
+                id: group.id,
+                groupOrderName: group.groupOrderName,
+                groupOrderIsActive: group.groupOrderIsActive,
+                orderDate: group.orderDate,
+                items: Object.values(group.itemsMap).map(i => ({
+                    ...i,
+                    lineTotal: i.lineTotal.toFixed(2)
+                })),
+                subtotal: group.subtotal.toFixed(2),
+                shipping: group.shipping.toFixed(2),
+                appliedCredit: group.appliedCredit.toFixed(2),
+                total: group.total.toFixed(2),
+                payment_status,
+                shipping_status: group.shipping_statuses.size > 0 ? shipping_status : null
+            };
+        });
+
+        formattedOrders.sort((a,b) => new Date(b.orderDate) - new Date(a.orderDate));
+
+        res.send({
+            customerName: customer.name || '',
+            orders: formattedOrders
+        });
+    } catch (error) {
+        console.error(`Error in getOrderStatus for PSID ${psid}:`, error);
+        res.status(500).send({ message: "Error retrieving order status." });
+    }
+};
+

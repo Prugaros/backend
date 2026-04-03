@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const FormData = require('form-data');
 const { callSendAPI } = require("../utils/facebookApi");
+const { sendTransactionalEmail, sendBroadcastEmail } = require('../utils/emailService');
 
 const formatSmartDate = (date, includeYear = true) => {
   if (!date) return "??/??";
@@ -46,6 +47,9 @@ exports.create = async (req, res) => {
     end_date: req.body.end_date || null,
     status: req.body.status || 'Draft', // Default to Draft
     custom_message: req.body.custom_message || null,
+    email_custom_message: req.body.email_custom_message || null,
+    facebook_image_url: req.body.facebook_image_url || null,
+    email_image_url: req.body.email_image_url || null,
     // facebook_post_id will be set later when 'started'
   };
 
@@ -196,7 +200,13 @@ exports.startOrder = async (req, res) => {
           postMessage += `\n\nTo order, click here and hit send: ${messengerLink}`;
 
           // 2. Select and prepare images for upload
-          const imagesToUpload = featuredProducts;
+          let imagesToUpload = featuredProducts;
+          if (groupOrder.facebook_image_url) {
+            imagesToUpload = [{
+              name: groupOrder.name,
+              images: [groupOrder.facebook_image_url]
+            }];
+          }
 
           const uploadedPhotoIds = [];
           if (imagesToUpload.length > 0) {
@@ -277,52 +287,63 @@ exports.startOrder = async (req, res) => {
 
     await groupOrder.save();
 
-    // --- Send Notifications to All Eligible Customers ---
-    try {
-      // Find all customers who haven't opted out and have a PSID
-      const customersToNotify = await Customer.findAll({
-        where: {
-          disable_grouporder_notification: false,
-          facebook_psid: { [Op.not]: null }
-        }
-      });
+    // --- Respond immediately so the admin isn't blocked ---
+    res.send({ message: "Group Order started successfully.", facebookPostId: facebookPostId });
 
-      if (customersToNotify.length > 0) {
-        console.log(`[NOTIF] Notifying ${customersToNotify.length} customers about new Group Order.`);
+    // --- Send Notifications to All Eligible Customers (background task) ---
+    (async () => {
+      const emailBatchSize = parseInt(process.env.EMAIL_BATCH_SIZE || '50', 10);
+      const emailBatchDelayMs = parseInt(process.env.EMAIL_BATCH_DELAY_MS || '3600000', 10);
+
+      try {
+        const customersToNotify = await Customer.findAll({
+          where: {
+            disable_grouporder_notification: false,
+            facebook_psid: { [Op.not]: null }
+          }
+        });
+
+        if (customersToNotify.length === 0) return;
+
+        console.log(`[NOTIF] Notifying ${customersToNotify.length} customers. Email batch size: ${emailBatchSize}, delay: ${emailBatchDelayMs / 60000} min`);
 
         const frontendBaseUrl = process.env.FRONTEND_URL;
-        let featuredImageUrl = "https://via.placeholder.com/300x200?text=Select+Items"; // Default
+        let featuredImageUrl = "https://via.placeholder.com/300x200?text=Select+Items";
 
-        try {
-          const featuredCollections = await db.Collection.findAll({
-            where: { is_featured: true, isActive: true, '$brand.isActive$': true },
-            include: [
-              { model: db.Product, as: 'products', where: { is_active: true }, required: false },
-              { model: db.Brand, as: 'brand', attributes: ['name', 'isActive'], where: { isActive: true } }
-            ],
-            order: [['displayOrder', 'ASC']]
-          });
-
-          const firstCollectionWithProducts = featuredCollections.find(c => c.products && c.products.length > 0);
-          if (firstCollectionWithProducts) {
-            const firstProduct = firstCollectionWithProducts.products[0];
-            if (firstProduct && firstProduct.images && firstProduct.images.length > 0) {
-              featuredImageUrl = firstProduct.images[0].startsWith('http') ? firstProduct.images[0] : `${process.env.BACKEND_URL}/${firstProduct.images[0]}`;
+        if (groupOrder.email_image_url) {
+          const cleanImageName = groupOrder.email_image_url.split(/[\\/]/).pop();
+          featuredImageUrl = groupOrder.email_image_url.startsWith('http') ? groupOrder.email_image_url : `${process.env.BACKEND_URL}/uploads/images/${cleanImageName}`;
+        } else {
+          try {
+            const featuredCollections = await db.Collection.findAll({
+              where: { is_featured: true, isActive: true, '$brand.isActive$': true },
+              include: [
+                { model: db.Product, as: 'products', where: { is_active: true }, required: false },
+                { model: db.Brand, as: 'brand', attributes: ['name', 'isActive'], where: { isActive: true } }
+              ],
+              order: [['displayOrder', 'ASC']]
+            });
+            const firstCollectionWithProducts = featuredCollections.find(c => c.products && c.products.length > 0);
+            if (firstCollectionWithProducts) {
+              const firstProduct = firstCollectionWithProducts.products[0];
+              if (firstProduct && firstProduct.images && firstProduct.images.length > 0) {
+                featuredImageUrl = firstProduct.images[0].startsWith('http') ? firstProduct.images[0] : `${process.env.BACKEND_URL}/${firstProduct.images[0]}`;
+              }
             }
+          } catch (imgErr) {
+            console.error("[NOTIF] Error fetching featured image:", imgErr);
           }
-        } catch (imgErr) {
-          console.error("[NOTIF] Error fetching featured image for notification:", imgErr);
         }
+
         const formatDate = (date) => {
           if (!date) return "??/??";
           const d = new Date(date);
-          const month = (d.getMonth() + 1).toString().padStart(1, '0');
-          const day = d.getDate().toString().padStart(1, '0');
-          return `${month}/${day}`;
+          return `${(d.getMonth() + 1).toString().padStart(1, '0')}/${d.getDate().toString().padStart(1, '0')}`;
         };
 
-        const dateRangeTitle = `${formatDate(groupOrder.start_date, false)} - ${formatSmartDate(groupOrder.end_date, false)} Group Order Now Open!`;
+        const dateRangeTitle = `${formatDate(groupOrder.start_date)} - ${formatSmartDate(groupOrder.end_date, false)} Group Order Now Open!`;
 
+        // ── Phase 1: Messenger notifications (one per customer, 100ms apart) ──────
         for (const customer of customersToNotify) {
           try {
             const webviewUrl = `${frontendBaseUrl}/messenger-order?psid=${encodeURIComponent(customer.facebook_psid)}`;
@@ -331,44 +352,65 @@ exports.startOrder = async (req, res) => {
                 type: "template",
                 payload: {
                   template_type: "generic",
-                  elements: [
-                    {
-                      title: dateRangeTitle,
-                      image_url: featuredImageUrl,
-                      subtitle: "A new Japan group order is open. Click below to start shopping.",
-                      default_action: {
-                        type: "web_url",
-                        url: webviewUrl,
-                        webview_height_ratio: "full",
-                        messenger_extensions: false
-                      },
-                      buttons: [
-                        {
-                          type: "web_url",
-                          url: webviewUrl,
-                          title: "Shop Now",
-                          webview_height_ratio: "full",
-                          messenger_extensions: false
-                        }
-                      ]
-                    }
-                  ]
+                  elements: [{
+                    title: dateRangeTitle,
+                    image_url: featuredImageUrl,
+                    subtitle: "A new Japan group order is open. Click below to start shopping.",
+                    default_action: { type: "web_url", url: webviewUrl, webview_height_ratio: "full", messenger_extensions: false },
+                    buttons: [{ type: "web_url", url: webviewUrl, title: "Shop Now", webview_height_ratio: "full", messenger_extensions: false }]
+                  }]
                 }
               }
             };
-
             await callSendAPI(customer.facebook_psid, notificationPayload, 'POST_PURCHASE_UPDATE');
-            await new Promise(resolve => setTimeout(resolve, 100)); // Rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
           } catch (notifErr) {
-            console.error(`[NOTIF] Failed to notify customer ${customer.id}:`, notifErr.message);
+            console.error(`[NOTIF] Messenger notification failed for customer ${customer.id}:`, notifErr.message);
           }
         }
-      }
-    } catch (notifFlowErr) {
-      console.error("[NOTIF] Error in notification flow:", notifFlowErr);
-    }
 
-    res.send({ message: "Group Order started successfully.", facebookPostId: facebookPostId });
+        // ── Phase 2: Bulk email batches (EMAIL_BATCH_SIZE per API call) ───────────
+        const customersWithEmail = customersToNotify.filter(c => c.email);
+        console.log(`[EMAIL] ${customersWithEmail.length} customers have email addresses. Sending in batches of ${emailBatchSize}.`);
+
+        for (let i = 0; i < customersWithEmail.length; i += emailBatchSize) {
+          const batch = customersWithEmail.slice(i, i + emailBatchSize);
+          const batchNum = Math.floor(i / emailBatchSize) + 1;
+          const totalBatches = Math.ceil(customersWithEmail.length / emailBatchSize);
+
+          try {
+            const backendBaseUrl = process.env.BACKEND_URL || 'http://localhost:3001';
+            const recipients = batch.map(c => ({
+              to: c.email,
+              name: c.name,
+              shopUrl: `${frontendBaseUrl}/messenger-order?psid=${encodeURIComponent(c.facebook_psid)}`,
+              unsubscribeUrl: `${backendBaseUrl}/api/customers/unsubscribe/grouporder/${encodeURIComponent(c.facebook_psid)}`
+            }));
+
+            await sendBroadcastEmail('GROUP_ORDER_OPEN', recipients, {
+              groupOrderName: groupOrder.name,
+              dateRangeTitle,
+              emailCustomMessage: groupOrder.email_custom_message,
+              featuredImageUrl
+            });
+
+            console.log(`[EMAIL] Batch ${batchNum}/${totalBatches} sent (${batch.length} emails).`);
+          } catch (batchErr) {
+            console.error(`[EMAIL] Batch ${batchNum}/${totalBatches} failed:`, batchErr.message);
+          }
+
+          // Wait between batches (skip delay after the final batch)
+          if (i + emailBatchSize < customersWithEmail.length) {
+            console.log(`[EMAIL] Waiting ${emailBatchDelayMs / 60000} min before next batch...`);
+            await new Promise(resolve => setTimeout(resolve, emailBatchDelayMs));
+          }
+        }
+
+        console.log('[NOTIF] Group Order notification run complete.');
+      } catch (notifFlowErr) {
+        console.error("[NOTIF] Error in notification flow:", notifFlowErr);
+      }
+    })();
 
   } catch (err) {
     res.status(500).send({ message: "Error starting Group Order with id=" + id + ": " + err.message });

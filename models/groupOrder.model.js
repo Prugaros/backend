@@ -51,6 +51,18 @@ module.exports = (sequelize, DataTypes) => {
     custom_message: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    email_custom_message: {
+      type: DataTypes.TEXT,
+      allowNull: true
+    },
+    facebook_image_url: {
+      type: DataTypes.STRING,
+      allowNull: true
+    },
+    email_image_url: {
+      type: DataTypes.STRING,
+      allowNull: true
     }
     // Optional: created_by_admin_id (INTEGER, foreign key to AdminUser)
     // Timestamps (createdAt, updatedAt) added automatically

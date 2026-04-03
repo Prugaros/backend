@@ -36,4 +36,7 @@ router.get("/order-summary", controller.getOrderSummary);
 router.get("/destash-profile", controller.getDestashProfile);
 router.post("/signup-destash", controller.signupDestash);
 
+// Customer-facing order status (PSID-gated, no auth required)
+router.get("/order-status", controller.getOrderStatus);
+
 module.exports = router;

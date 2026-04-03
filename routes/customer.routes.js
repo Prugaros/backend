@@ -17,6 +17,11 @@ module.exports = function(app) {
   );
 
   app.get(
+    "/api/customers/unsubscribe/grouporder/:psid",
+    controller.unsubscribeGroupOrder
+  );
+
+  app.get(
     "/api/customers/status/:psid",
     controller.getCustomerStatus
   );

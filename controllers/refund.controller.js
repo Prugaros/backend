@@ -4,6 +4,7 @@ const Order = db.Order;
 const Product = db.Product;
 const Customer = db.Customer;
 const { callSendAPI } = require('../utils/facebookApi');
+const { sendTransactionalEmail } = require('../utils/emailService');
 
 // Create a new refund
 exports.createRefund = async (req, res) => {
@@ -112,13 +113,24 @@ exports.updateRefundState = async (req, res) => {
 
     await refund.update({ state });
 
-    if (state === 'refunded' && refund.order.customer.facebook_psid) {
+    if (state === 'refunded') {
       const refundAmount = refund.quantity * refund.price;
-      const messageText = `A cash refund has been processed for your order.\n\nProduct: ${refund.product.name}\nQuantity: ${refund.quantity}\nAmount: $${refundAmount.toFixed(2)}`;
-      const message = {
-        text: messageText
-      };
-      await callSendAPI(refund.order.customer.facebook_psid, message, 'POST_PURCHASE_UPDATE');
+      const customer = refund.order.customer;
+
+      // Existing Messenger message
+      if (customer.facebook_psid) {
+        const messageText = `A cash refund has been processed for your order.\n\nProduct: ${refund.product.name}\nQuantity: ${refund.quantity}\nAmount: $${refundAmount.toFixed(2)}`;
+        await callSendAPI(customer.facebook_psid, { text: messageText }, 'POST_PURCHASE_UPDATE');
+      }
+
+      // Refund notice email (fire-and-forget)
+      if (customer.email) {
+        sendTransactionalEmail(
+          'REFUND_NOTICE',
+          { to: customer.email, name: customer.name },
+          { productName: refund.product.name, quantity: refund.quantity, amount: refundAmount }
+        ).catch(err => console.error('[EMAIL] Refund notice failed for customer', customer.id, ':', err.message));
+      }
     }
 
     res.status(200).send(refund);

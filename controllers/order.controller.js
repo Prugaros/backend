@@ -5,6 +5,7 @@ const { stringify } = require('csv-stringify/sync'); // For CSV export
 const facebookWebhookController = require("./facebook.webhook.controller.js");
 const { callSendAPI } = require("../utils/facebookApi.js");
 const inventoryController = require("./inventory.controller.js");
+const { sendTransactionalEmail } = require('../utils/emailService');
 
 // Retrieve all Orders from the database (with filtering and includes)
 exports.findAll = async (req, res) => {
@@ -762,6 +763,18 @@ exports.markAsPaid = async (req, res) => {
 
         await callSendAPI(customer.facebook_psid, { text: summaryText }, 'POST_PURCHASE_UPDATE');
 
+        // Send order confirmation email (fire-and-forget — failure does not affect the transaction)
+        if (customer.email) {
+            const statusUrl = `${process.env.FRONTEND_URL}/order-status?psid=${encodeURIComponent(customer.facebook_psid)}`;
+            sendTransactionalEmail(
+                'ORDER_CONFIRMATION',
+                { to: customer.email, name: customer.name },
+                { consolidatedItems, subtotal, totalShipping, totalAppliedCredit, grandTotal, statusUrl }
+            ).catch(err => console.error('[EMAIL] Order confirmation failed for customer', customer.id, ':', err.message));
+        } else {
+            console.warn('[EMAIL] Skipping order confirmation — customer', customer.id, 'has no email on file.');
+        }
+
         await t.commit();
 
         res.send({ message: "Orders marked as paid and consolidated summary sent." });
@@ -770,5 +783,91 @@ exports.markAsPaid = async (req, res) => {
         await t.rollback();
         console.error("Error in markAsPaid:", error);
         res.status(500).send({ message: "Error processing request: " + error.message });
+    }
+};
+
+// Update a single Order completely
+exports.update = async (req, res) => {
+    const id = req.params.id;
+    const { 
+        shipping_cost, applied_credit, total_amount, payment_status, shipping_status,
+        orderItems
+    } = req.body;
+
+    const t = await db.sequelize.transaction();
+
+    try {
+        const order = await Order.findByPk(id, { transaction: t });
+        if (!order) {
+            await t.rollback();
+            return res.status(404).send({ message: `Cannot find Order with id=${id}.` });
+        }
+
+        // Update core fields
+        await order.update({
+            shipping_cost,
+            applied_credit,
+            total_amount,
+            payment_status,
+            shipping_status
+        }, { transaction: t });
+
+        // Update order items if provided
+        if (orderItems && Array.isArray(orderItems)) {
+            // Check for existing refunds to protect those items
+            const refunds = await db.Refund.findAll({ where: { order_id: id }, transaction: t });
+            const refundedProductIds = refunds.map(r => r.product_id);
+
+            const existingItems = await OrderItem.findAll({ where: { order_id: id }, transaction: t });
+            
+            // IDs passed in the body
+            const incomingItemIds = orderItems.map(item => item.id).filter(id => id != null);
+
+            // Determine items to delete
+            const itemsToDelete = existingItems.filter(item => !incomingItemIds.includes(item.id));
+            
+            // Validate deletes: don't allow deleting items that have refunds
+            for (const item of itemsToDelete) {
+                if (refundedProductIds.includes(item.product_id)) {
+                    await t.rollback();
+                    return res.status(400).send({ message: `Cannot remove product ID ${item.product_id} because it has associated refunds.` });
+                }
+                await item.destroy({ transaction: t });
+            }
+
+            // Update or Create items
+            for (const itemData of orderItems) {
+                if (itemData.id) {
+                    const existingItem = existingItems.find(i => i.id === itemData.id);
+                    if (existingItem) {
+                        const refundAmount = refunds.filter(r => r.product_id === itemData.product_id).reduce((sum, r) => sum + r.quantity, 0);
+                        if (itemData.quantity < refundAmount) {
+                            await t.rollback();
+                            return res.status(400).send({ message: `Quantity for product ID ${itemData.product_id} cannot be less than refunded amount (${refundAmount}).` });
+                        }
+                        
+                        await existingItem.update({
+                            product_id: itemData.product_id,
+                            quantity: itemData.quantity,
+                            price_at_order_time: itemData.price_at_order_time
+                        }, { transaction: t });
+                    }
+                } else {
+                    await OrderItem.create({
+                        order_id: id,
+                        product_id: itemData.product_id,
+                        quantity: itemData.quantity || 1,
+                        price_at_order_time: itemData.price_at_order_time
+                    }, { transaction: t });
+                }
+            }
+        }
+
+        await t.commit();
+        res.send({ message: "Order was updated successfully." });
+    } catch (err) {
+        await t.rollback();
+        console.error("Error updating order:", err);
+        res.status(500).send({ message: "Error updating Order with id=" + id });
     }
 };
