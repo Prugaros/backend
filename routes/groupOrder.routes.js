@@ -5,8 +5,14 @@ const router = express.Router();
 
 // Apply JWT verification middleware to all group order routes
 router.use(authJwt.verifyToken);
-// Optional: Add ensureUserExists if needed
-// router.use(authJwt.ensureUserExists);
+
+// --- Broadcast (must be before /:id to avoid "broadcast" being matched as an id) ---
+
+// Get the number of customers who will receive a broadcast email
+router.get("/broadcast/subscriber-count", groupOrders.getBroadcastSubscriberCount);
+
+// Send a custom broadcast email to all opted-in customers
+router.post("/broadcast", groupOrders.sendBroadcast);
 
 // --- Standard CRUD ---
 

@@ -303,12 +303,119 @@ function buildGroupOrderOpenBulkTemplate(payload) {
 }
 
 // ---------------------------------------------------------------------------
+// CUSTOM_BROADCAST — fully customizable subject/body/banner
+// ---------------------------------------------------------------------------
+function buildCustomBroadcastEmail(recipient, payload) {
+    const { subject, bodyText, featuredImageUrl, includeShopLink, shopUrl } = payload;
+
+    const bannerHtml = featuredImageUrl
+        ? `<img src="${featuredImageUrl}" alt="Banner" style="width: 100%; border-radius: 12px; margin-bottom: 24px;" />`
+        : '';
+
+    const bodyHtml = bodyText
+        ? `<p style="color:#e5e7eb; margin: 0 0 32px 0; white-space: pre-wrap;">${bodyText}</p>`
+        : '';
+
+    const shopButtonHtml = (includeShopLink && shopUrl)
+        ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 32px;">
+             <tr><td align="center">
+               <a href="${shopUrl}" style="display: inline-block; padding: 14px 32px; background-color: #c084fc; color: #0f0f0f; font-weight: bold; font-size: 16px; border-radius: 8px; text-decoration: none;">Shop Now →</a>
+             </td></tr>
+           </table>`
+        : '';
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0; padding:0; background-color:#0f0f0f; font-family: Arial, sans-serif; color: #e5e7eb;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#0f0f0f; padding: 40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#1a1a1a; border-radius: 12px; padding: 40px; max-width: 600px;">
+          <tr>
+            <td>
+              ${bannerHtml}
+              ${bodyHtml}
+              ${shopButtonHtml}
+              <p style="margin-top: 32px; color:#6b7280; font-size: 13px;">Questions? <a href="https://m.me/naomi.seijo.2025" style="color:#c084fc;">Message us on Facebook</a></p>
+              <p style="margin-top: 8px; color:#4b5563; font-size: 12px;">You received this because you opted in to group order notifications. <a href="${recipient.unsubscribeUrl}" style="color:#6b7280; text-decoration:underline;">Unsubscribe</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const shopLinkPlain = (includeShopLink && shopUrl) ? `\n\nShop Now: ${shopUrl}` : '';
+    const plain = `${bodyText || ''}${shopLinkPlain}\n\nQuestions? https://m.me/naomi.seijo.2025\n\nTo unsubscribe: ${recipient.unsubscribeUrl}`;
+
+    return { subject, html, plain };
+}
+
+// Bulk variant — uses {{ }} Maileroo template variables per-recipient
+function buildCustomBroadcastBulkTemplate(payload) {
+    const { subject, bodyText, featuredImageUrl, includeShopLink } = payload;
+
+    const bannerHtml = featuredImageUrl
+        ? `<img src="${featuredImageUrl}" alt="Banner" style="width: 100%; border-radius: 12px; margin-bottom: 24px;" />`
+        : '';
+
+    const bodyHtml = bodyText
+        ? `<p style="color:#e5e7eb; margin: 0 0 32px 0; white-space: pre-wrap;">${bodyText}</p>`
+        : '';
+
+    // Only render the button block when shop links are enabled.
+    // We build the template server-side so there's no risk of an empty href.
+    const shopButtonHtml = includeShopLink
+        ? `<table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom: 32px;">
+             <tr><td align="center">
+               <a href="{{ shop_url }}" style="display: inline-block; padding: 14px 32px; background-color: #c084fc; color: #0f0f0f; font-weight: bold; font-size: 16px; border-radius: 8px; text-decoration: none;">Shop Now \u2192</a>
+             </td></tr>
+           </table>`
+        : '';
+
+    const html = `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="margin:0; padding:0; background-color:#0f0f0f; font-family: Arial, sans-serif; color: #e5e7eb;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#0f0f0f; padding: 40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#1a1a1a; border-radius: 12px; padding: 40px; max-width: 600px;">
+          <tr>
+            <td>
+              ${bannerHtml}
+              ${bodyHtml}
+              ${shopButtonHtml}
+              <p style="margin-top: 32px; color:#6b7280; font-size: 13px;">Questions? <a href="https://m.me/naomi.seijo.2025" style="color:#c084fc;">Message us on Facebook</a></p>
+              <p style="margin-top: 8px; color:#4b5563; font-size: 12px;">You received this because you opted in to group order notifications. <a href="{{ unsubscribe_url }}" style="color:#6b7280; text-decoration:underline;">Unsubscribe</a></p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const shopLinkPlain = includeShopLink ? `\n\nShop Now: {{ shop_url }}` : '';
+    const plain = `${bodyText || ''}${shopLinkPlain}\n\nQuestions? https://m.me/naomi.seijo.2025\n\nTo unsubscribe: {{ unsubscribe_url }}`;
+
+    return { subject, html, plain };
+}
+
+// ---------------------------------------------------------------------------
 // Template registry
 // ---------------------------------------------------------------------------
 const TEMPLATES = {
-    ORDER_CONFIRMATION: buildOrderConfirmationEmail,
-    REFUND_NOTICE:      buildRefundNoticeEmail,
-    GROUP_ORDER_OPEN:   buildGroupOrderOpenEmail
+    ORDER_CONFIRMATION:  buildOrderConfirmationEmail,
+    REFUND_NOTICE:       buildRefundNoticeEmail,
+    GROUP_ORDER_OPEN:    buildGroupOrderOpenEmail,
+    CUSTOM_BROADCAST:    buildCustomBroadcastEmail
 };
 
 // ---------------------------------------------------------------------------
@@ -394,6 +501,23 @@ async function sendBroadcastEmail(type, recipients, payload) {
 
         const result = await _sendBulkViaMaileroo(messages, subject, html, plain);
         console.log(`[EMAIL] ✅ Bulk ${type} sent to ${recipients.length} recipients. Reference IDs: ${result?.data?.reference_ids?.length || 'unknown'}`);
+        return;
+    }
+
+    if (type === 'CUSTOM_BROADCAST') {
+        const { subject, html, plain } = buildCustomBroadcastBulkTemplate(payload);
+
+        const messages = recipients.map(r => ({
+            from: { address: fromAddress, display_name: fromName },
+            to: [{ address: r.to, display_name: r.name || '' }],
+            template_data: {
+                unsubscribe_url: r.unsubscribeUrl,
+                ...(payload.includeShopLink && r.shopUrl ? { shop_url: r.shopUrl } : {})
+            }
+        }));
+
+        const result = await _sendBulkViaMaileroo(messages, subject, html, plain);
+        console.log(`[EMAIL] ✅ Bulk ${type} sent to ${recipients.length} recipients.`);
         return;
     }
 

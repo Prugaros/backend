@@ -471,3 +471,106 @@ exports.reactivateOrder = async (req, res) => {
     res.status(500).send({ message: "Error reactivating Group Order with id=" + id + ": " + err.message });
   }
 };
+
+// --- Broadcast Email ---
+
+// GET /api/group-orders/broadcast/subscriber-count
+// Returns subscriber count + current batch settings so the frontend can show an ETA.
+exports.getBroadcastSubscriberCount = async (req, res) => {
+  try {
+    const count = await Customer.count({
+      where: {
+        disable_grouporder_notification: false,
+        email: { [Op.not]: null },
+        facebook_psid: { [Op.not]: null }
+      }
+    });
+    const batchSize = parseInt(process.env.EMAIL_BATCH_SIZE || '50', 10);
+    const batchDelayMs = parseInt(process.env.EMAIL_BATCH_DELAY_MS || '0', 10);
+    res.json({ count, batchSize, batchDelayMs });
+  } catch (err) {
+    res.status(500).send({ message: "Error fetching subscriber count: " + err.message });
+  }
+};
+
+// POST /api/group-orders/broadcast
+// Body: { subject, bodyText, featuredImageUrl?, includeShopLink? }
+// Responds immediately, sends email in background.
+exports.sendBroadcast = async (req, res) => {
+  const { subject, bodyText, featuredImageUrl, includeShopLink = true } = req.body;
+
+  if (!subject || !bodyText) {
+    return res.status(400).json({ message: 'subject and bodyText are required.' });
+  }
+
+  try {
+    // Require facebook_psid: needed for both the shop URL and the unsubscribe URL
+    const eligibleCustomers = await Customer.findAll({
+      where: {
+        disable_grouporder_notification: false,
+        email: { [Op.not]: null },
+        facebook_psid: { [Op.not]: null }
+      }
+    });
+
+    if (eligibleCustomers.length === 0) {
+      return res.json({ message: 'No subscribed customers with email addresses. No emails sent.', sent: 0 });
+    }
+
+    res.json({ message: `Broadcast queued for ${eligibleCustomers.length} recipient(s).`, sent: eligibleCustomers.length });
+
+    // --- Background send ---
+    (async () => {
+      const emailBatchSize = parseInt(process.env.EMAIL_BATCH_SIZE || '50', 10);
+      const emailBatchDelayMs = parseInt(process.env.EMAIL_BATCH_DELAY_MS || '0', 10);
+      const backendBaseUrl = process.env.BACKEND_URL || 'http://localhost:3001';
+      const frontendBaseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+      // Resolve relative image path to absolute URL
+      let resolvedImageUrl = featuredImageUrl || null;
+      if (resolvedImageUrl && !resolvedImageUrl.startsWith('http')) {
+        const cleanName = resolvedImageUrl.split(/[\\/]/).pop();
+        resolvedImageUrl = `${backendBaseUrl}/uploads/images/${cleanName}`;
+      }
+
+      for (let i = 0; i < eligibleCustomers.length; i += emailBatchSize) {
+        const batch = eligibleCustomers.slice(i, i + emailBatchSize);
+        const batchNum = Math.floor(i / emailBatchSize) + 1;
+        const totalBatches = Math.ceil(eligibleCustomers.length / emailBatchSize);
+
+        try {
+          const recipients = batch.map(c => ({
+            to: c.email,
+            name: c.name,
+            shopUrl: includeShopLink
+              ? `${frontendBaseUrl}/messenger-order?psid=${encodeURIComponent(c.facebook_psid)}`
+              : null,
+            unsubscribeUrl: `${backendBaseUrl}/api/customers/unsubscribe/grouporder/${encodeURIComponent(c.facebook_psid)}`
+          }));
+
+          await sendBroadcastEmail('CUSTOM_BROADCAST', recipients, {
+            subject,
+            bodyText,
+            featuredImageUrl: resolvedImageUrl,
+            includeShopLink
+          });
+
+          console.log(`[BROADCAST] Batch ${batchNum}/${totalBatches} sent (${batch.length} emails).`);
+        } catch (batchErr) {
+          console.error(`[BROADCAST] Batch ${batchNum}/${totalBatches} failed:`, batchErr.message);
+        }
+
+        if (i + emailBatchSize < eligibleCustomers.length) {
+          console.log(`[BROADCAST] Waiting ${emailBatchDelayMs / 60000} min before next batch...`);
+          await new Promise(resolve => setTimeout(resolve, emailBatchDelayMs));
+        }
+      }
+
+      console.log('[BROADCAST] Broadcast email run complete.');
+    })();
+
+  } catch (err) {
+    res.status(500).send({ message: "Error sending broadcast: " + err.message });
+  }
+};
+
